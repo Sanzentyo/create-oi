@@ -35,6 +35,13 @@ fmt-check:
 # Full CI check: format, clippy, build, test
 ci: fmt-check clippy build test
 
+# Verify no_std builds (protocol bare + create-oi bare + embassy for embedded target)
+check-nostd:
+    cargo build -p create-oi-protocol --no-default-features
+    cargo build -p create-oi --no-default-features
+    cargo build -p create-oi-embassy --target thumbv7em-none-eabihf
+    cargo build -p create-oi --no-default-features --target thumbv7em-none-eabihf
+
 # Clean build artifacts
 clean:
     cargo clean

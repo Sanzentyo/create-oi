@@ -10,12 +10,12 @@ keywords = ["irobot", "create", "roomba", "tokio", "async"]
 categories = ["hardware-support", "asynchronous"]
 
 [dependencies]
-create-oi.workspace = true
+create-oi = { workspace = true, features = ["std"] }
 tokio.workspace = true
 tokio-serial.workspace = true
 
 [dev-dependencies]
-create-oi = { workspace = true }
+create-oi = { workspace = true, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [[example]]

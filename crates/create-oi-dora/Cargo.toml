@@ -11,7 +11,7 @@ categories = ["hardware-support", "science::robotics"]
 publish = false  # integration crate — published separately if needed
 
 [dependencies]
-create-oi.workspace = true
+create-oi = { workspace = true, features = ["std"] }
 create-oi-serial = { path = "../create-oi-serial" }
 dora-node-api = "0.3"
 arrow = { version = "54", default-features = false, features = ["json"] }
