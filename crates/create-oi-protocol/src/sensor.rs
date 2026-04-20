@@ -3,33 +3,33 @@
 //! Each sensor value is decoded from raw big-endian bytes using manual
 //! `from_be_bytes` — zero allocation, zero copy.
 
-use crate::error::Error;
+use crate::error::ProtocolError;
 use crate::types::{ChargingState, IrChar, OiMode};
 
-use super::opcode::packet_info;
+use crate::opcode::packet_info;
 
 // ---------------------------------------------------------------------------
 // Raw sensor value decoding
 // ---------------------------------------------------------------------------
 
 /// Decode a single unsigned value from big-endian bytes.
-pub fn decode_u8(data: &[u8]) -> Result<u8, Error> {
+pub fn decode_u8(data: &[u8]) -> Result<u8, ProtocolError> {
     data.first()
         .copied()
-        .ok_or(Error::InsufficientData { need: 1, got: 0 })
+        .ok_or(ProtocolError::InsufficientData { need: 1, got: 0 })
 }
 
 /// Decode a signed 8-bit value.
-pub fn decode_i8(data: &[u8]) -> Result<i8, Error> {
+pub fn decode_i8(data: &[u8]) -> Result<i8, ProtocolError> {
     data.first()
         .map(|&b| b as i8)
-        .ok_or(Error::InsufficientData { need: 1, got: 0 })
+        .ok_or(ProtocolError::InsufficientData { need: 1, got: 0 })
 }
 
 /// Decode a 16-bit unsigned value from big-endian bytes.
-pub fn decode_u16(data: &[u8]) -> Result<u16, Error> {
+pub fn decode_u16(data: &[u8]) -> Result<u16, ProtocolError> {
     if data.len() < 2 {
-        return Err(Error::InsufficientData {
+        return Err(ProtocolError::InsufficientData {
             need: 2,
             got: data.len(),
         });
@@ -38,9 +38,9 @@ pub fn decode_u16(data: &[u8]) -> Result<u16, Error> {
 }
 
 /// Decode a 16-bit signed value from big-endian bytes.
-pub fn decode_i16(data: &[u8]) -> Result<i16, Error> {
+pub fn decode_i16(data: &[u8]) -> Result<i16, ProtocolError> {
     if data.len() < 2 {
-        return Err(Error::InsufficientData {
+        return Err(ProtocolError::InsufficientData {
             need: 2,
             got: data.len(),
         });
@@ -130,12 +130,12 @@ impl SensorData {
     /// and store the result into the appropriate field.
     ///
     /// Returns the number of bytes consumed.
-    pub fn decode_packet(&mut self, id: u8, data: &[u8]) -> Result<usize, Error> {
-        let info =
-            packet_info(id).ok_or_else(|| Error::Protocol(format!("unknown packet id {id}")))?;
+    pub fn decode_packet(&mut self, id: u8, data: &[u8]) -> Result<usize, ProtocolError> {
+        let info = packet_info(id)
+            .ok_or_else(|| ProtocolError::Protocol(format!("unknown packet id {id}")))?;
         let len = info.len as usize;
         if data.len() < len {
-            return Err(Error::InsufficientData {
+            return Err(ProtocolError::InsufficientData {
                 need: len,
                 got: data.len(),
             });
@@ -147,7 +147,7 @@ impl SensorData {
 
     /// Decode a sequence of packets (e.g., from a query list response).
     /// `ids` is the ordered list of packet IDs. `data` is the concatenated bytes.
-    pub fn decode_packets(&mut self, ids: &[u8], data: &[u8]) -> Result<(), Error> {
+    pub fn decode_packets(&mut self, ids: &[u8], data: &[u8]) -> Result<(), ProtocolError> {
         let mut offset = 0;
         for &id in ids {
             let consumed = self.decode_packet(id, &data[offset..])?;
@@ -156,7 +156,7 @@ impl SensorData {
         Ok(())
     }
 
-    fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), Error> {
+    fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), ProtocolError> {
         match id {
             7 => self.bumps_and_wheeldrops = Some(decode_u8(data)?),
             8 => self.wall = Some(decode_u8(data)? != 0),
@@ -210,19 +210,19 @@ impl SensorData {
             56 => self.main_brush_motor_current = Some(decode_i16(data)?),
             57 => self.side_brush_motor_current = Some(decode_i16(data)?),
             58 => self.stasis = Some(decode_u8(data)? != 0),
-            _ => return Err(Error::Protocol(format!("unknown packet id {id}"))),
+            _ => return Err(ProtocolError::Protocol(format!("unknown packet id {id}"))),
         }
         Ok(())
     }
 }
 
 /// Compute the expected total data length for a list of packet IDs.
-pub fn expected_data_len(ids: &[u8]) -> Result<usize, Error> {
+pub fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
     ids.iter()
         .map(|&id| {
             packet_info(id)
                 .map(|p| p.len as usize)
-                .ok_or_else(|| Error::Protocol(format!("unknown packet id {id}")))
+                .ok_or_else(|| ProtocolError::Protocol(format!("unknown packet id {id}")))
         })
         .sum()
 }
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn decode_all_individual_packets() {
-        use crate::protocol::opcode::SENSOR_PACKETS;
+        use crate::opcode::SENSOR_PACKETS;
         // Verify every packet in SENSOR_PACKETS can be decoded without panic.
         let mut sd = SensorData::default();
         for p in SENSOR_PACKETS {

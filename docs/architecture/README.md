@@ -9,32 +9,37 @@ It supports Create 1, Create 2, and compatible Roomba robots over serial.
 ## Design Principles
 
 - **Sans-IO**: Protocol encoding/decoding is completely independent of I/O.
-  The `protocol` module works on plain `&[u8]` — zero allocation, zero copy.
+  The `create-oi-protocol` crate works on plain `&[u8]` — zero allocation, zero copy.
 - **TypeState**: The OI mode is encoded as a type parameter on `Create<M, T>`.
   Invalid operations are compile-time errors, not runtime panics.
-- **Multi-crate workspace**: Core protocol is independent; transports are separate crates.
-- **Minimal dependencies**: Core depends only on `thiserror`. No proc macros.
+- **Layered architecture**: Wire protocol is separate from transport+control.
+- **Multi-crate workspace**: Core protocol and control are independent; transports are separate crates.
+- **Minimal dependencies**: Protocol crate depends only on `thiserror`. No proc macros.
 - **MIT OR Apache-2.0**: Independent implementation of the open OI spec.
 
 ## Workspace Structure
 
 ```
-Cargo.toml                       # Virtual workspace manifest
+Cargo.toml                       # Virtual workspace manifest (resolver = "3")
 crates/
-├── create-oi/                   # Core: protocol, types, traits, Create<M,T>, AsyncCreate<M,T>
+├── create-oi-protocol/          # Sans-IO wire format: opcodes, commands, sensors, stream
+│   └── src/
+│       ├── lib.rs               # Module declarations + prelude
+│       ├── error.rs             # ProtocolError (Checksum, InsufficientData, Protocol)
+│       ├── types.rs             # Wire-level enums: OiMode, ChargingState, IrChar, etc.
+│       ├── opcode.rs            # OI opcodes (#[repr(u8)]) + sensor packet metadata
+│       ├── command.rs           # Command encoding → fixed-size byte arrays
+│       ├── sensor.rs            # Sensor packet parsing from &[u8] → SensorData
+│       └── stream.rs            # StreamParser: byte-wise framing state machine
+├── create-oi/                   # Control layer: TypeState API + transport traits
 │   ├── src/
-│   │   ├── lib.rs               # Public API + prelude
-│   │   ├── error.rs             # Error, TransitionError<R>, ConnectError<T>
-│   │   ├── types.rs             # Domain ADTs + validated newtypes
+│   │   ├── lib.rs               # Public API + prelude + protocol re-exports
+│   │   ├── error.rs             # Error (wraps ProtocolError + Io + domain errors)
+│   │   ├── types.rs             # RobotModel + validated newtypes (Velocity, Radius, etc.)
 │   │   ├── mode.rs              # TypeState markers + sealed capability traits
 │   │   ├── transport.rs         # Transport + AsyncTransport trait definitions
-│   │   ├── robot.rs             # Create<M, T: Transport> — sync API
-│   │   ├── async_robot.rs       # AsyncCreate<M, T: AsyncTransport> — async API
-│   │   └── protocol/
-│   │       ├── opcode.rs        # OI opcodes + sensor packet metadata table
-│   │       ├── command.rs       # Command encoding → fixed-size byte arrays
-│   │       ├── sensor.rs        # Sensor packet parsing from &[u8]
-│   │       └── stream.rs        # Stream framing state machine
+│   │   ├── create.rs            # Create<M, T: Transport> — sync API
+│   │   └── async_create.rs      # AsyncCreate<M, T: AsyncTransport> — async API
 │   └── tests/
 │       ├── mock_robot.rs        # 14 sync integration tests
 │       └── mock_async_robot.rs  # 13 async integration tests
@@ -43,6 +48,26 @@ crates/
 ├── create-oi-smol/              # SmolTransport (experimental, publish=false)
 └── create-oi-dora/              # dora-rs dataflow node (publish=false)
 ```
+
+## Layer Separation
+
+### `create-oi-protocol` — Wire Format (Sans-IO)
+
+Pure encoding/decoding with no transport dependency:
+- `Opcode` — `#[repr(u8)]` enum, cast via `as u8`
+- `command::encode_*()` — returns `[u8; N]` or `Vec<u8>`
+- `SensorData::decode_packet()` — parses from `&[u8]`
+- `StreamParser::feed(&[u8])` — byte-wise state machine
+- `ProtocolError` — Checksum, InsufficientData, Protocol
+
+### `create-oi` — Control Layer
+
+Transport-aware TypeState API:
+- `Create<M, T>` / `AsyncCreate<M, T>` — mode as type parameter
+- `Transport` / `AsyncTransport` traits
+- `Error` — wraps `ProtocolError` via `#[from]`, adds Io/Connection/etc.
+- Validated newtypes (Velocity, Radius, MotorPower, etc.)
+- `mode.rs` — sealed traits gating method availability
 
 ## TypeState Pattern
 
@@ -78,20 +103,12 @@ Physical quantities use validated newtypes with private inner fields:
 - `MotorPower(f32)` — range [-1.0, 1.0]
 - All reject NaN/infinity via `new()` and `TryFrom<f32>`
 
-## Sans-IO Protocol Layer
-
-The `protocol` module has zero I/O dependencies:
-
-1. **Opcodes** (`opcode.rs`): Enum of all OI opcodes + packet metadata table
-2. **Commands** (`command.rs`): Encode commands to fixed-size byte arrays
-3. **Sensors** (`sensor.rs`): Decode sensor packets from `&[u8]` into `SensorData`
-4. **Stream** (`stream.rs`): `StreamParser` with `feed(&[u8])` state machine
-
 ## Crates
 
 | Crate | Description | Dependencies |
 |-------|-------------|-------------|
-| `create-oi` | Core protocol, types, traits | `thiserror` |
+| `create-oi-protocol` | Sans-IO wire protocol | `thiserror` |
+| `create-oi` | TypeState control API + transport traits | `create-oi-protocol`, `thiserror` |
 | `create-oi-serial` | Sync serial transport | `create-oi`, `serialport 4.9` |
 | `create-oi-tokio` | Tokio async transport | `create-oi`, `tokio 1`, `tokio-serial 5.4` |
 | `create-oi-smol` | Smol async transport (stub) | `create-oi`, `smol 2`, `async-io 2` |

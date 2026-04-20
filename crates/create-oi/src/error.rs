@@ -1,5 +1,9 @@
-//! Error types for the libcreate crate.
+//! Error types for the create-oi control layer.
+//!
+//! This module defines high-level errors that combine I/O failures,
+//! protocol errors (from `create-oi-protocol`), and domain validation errors.
 
+use create_oi_protocol::error::ProtocolError;
 use thiserror::Error;
 
 /// Errors that can occur when interacting with the robot.
@@ -9,17 +13,13 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A protocol-level error (checksum, parse, malformed data).
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
     /// A value was invalid for its domain type.
     #[error("invalid value for {field}: {reason}")]
     InvalidValue { field: &'static str, reason: String },
-
-    /// The OI protocol reported an unexpected or malformed response.
-    #[error("protocol error: {0}")]
-    Protocol(String),
-
-    /// A checksum in a sensor stream frame did not match.
-    #[error("checksum mismatch: expected {expected:#04x}, got {actual:#04x}")]
-    Checksum { expected: u8, actual: u8 },
 
     /// The actual OI mode on the hardware does not match the expected TypeState.
     #[error("mode mismatch: expected {expected}, actual {actual}")]
@@ -35,10 +35,6 @@ pub enum Error {
     /// The robot is not connected.
     #[error("robot not connected")]
     NotConnected,
-
-    /// Not enough bytes available to parse a sensor response.
-    #[error("sensor data too short: need {need} bytes, got {got}")]
-    InsufficientData { need: usize, got: usize },
 }
 
 /// Error returned when a mode transition fails, preserving the robot

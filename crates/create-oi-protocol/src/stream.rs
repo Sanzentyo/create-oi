@@ -11,10 +11,10 @@
 //! This module provides a [`StreamParser`] that consumes raw bytes via [`feed()`](StreamParser::feed)
 //! and emits parsed frames.
 
-use crate::error::Error;
-use crate::protocol::sensor::SensorData;
+use crate::error::ProtocolError;
+use crate::sensor::SensorData;
 
-use super::opcode::packet_info;
+use crate::opcode::packet_info;
 
 /// Header byte that starts every stream frame.
 const STREAM_HEADER: u8 = 19;
@@ -57,6 +57,15 @@ impl StreamParser {
         }
     }
 
+    /// Create a new parser.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(capacity),
+            state: State::WaitingHeader,
+            packet_ids: Vec::new(),
+        }
+    }
+
     /// Set the packet IDs that this stream is expected to contain.
     /// This must match the IDs passed to the `encode_stream()` command.
     pub fn set_packet_ids(&mut self, ids: &[u8]) {
@@ -73,7 +82,7 @@ impl StreamParser {
     ///
     /// Returns a `Vec` of successfully parsed sensor frames.
     /// In normal operation 0 or 1 frames are returned per call.
-    pub fn feed(&mut self, data: &[u8]) -> Vec<Result<SensorData, Error>> {
+    pub fn feed(&mut self, data: &[u8]) -> Vec<Result<SensorData, ProtocolError>> {
         let mut frames = Vec::new();
         for &byte in data {
             match self.state {
@@ -112,13 +121,13 @@ impl StreamParser {
     }
 
     /// Parse the complete frame in `self.buf`.
-    fn parse_frame(&mut self) -> Result<SensorData, Error> {
+    fn parse_frame(&mut self) -> Result<SensorData, ProtocolError> {
         // Verify checksum: sum of all bytes (including header) mod 256 == 0
         let checksum: u8 = self.buf.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
         if checksum != 0 {
             let expected = self.buf.last().copied().unwrap_or(0);
             let actual = expected.wrapping_sub(checksum).wrapping_add(expected);
-            return Err(Error::Checksum { expected, actual });
+            return Err(ProtocolError::Checksum { expected, actual });
         }
 
         // Parse the payload: [id1][data1...][id2][data2...] ...
@@ -134,14 +143,14 @@ impl StreamParser {
             let info = match packet_info(pkt_id) {
                 Some(i) => i,
                 None => {
-                    return Err(Error::Protocol(format!(
+                    return Err(ProtocolError::Protocol(format!(
                         "unknown packet id {pkt_id} in stream"
                     )));
                 }
             };
             let len = info.len as usize;
             if offset + len > payload.len() {
-                return Err(Error::InsufficientData {
+                return Err(ProtocolError::InsufficientData {
                     need: len,
                     got: payload.len() - offset,
                 });

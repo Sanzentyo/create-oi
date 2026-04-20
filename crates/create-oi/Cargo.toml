@@ -5,11 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Sans-IO iRobot Create/Roomba Open Interface protocol — types, encoding, decoding, and TypeState robot API"
+description = "iRobot Create/Roomba Open Interface — TypeState robot API with transport abstraction"
 keywords = ["irobot", "create", "roomba", "robot", "protocol"]
-categories = ["hardware-support", "embedded", "no-std"]
+categories = ["hardware-support", "embedded"]
 
 [dependencies]
+create-oi-protocol.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -1,5 +1,7 @@
 [workspace]
+resolver = "3"
 members = [
+    "crates/create-oi-protocol",
     "crates/create-oi",
     "crates/create-oi-serial",
     "crates/create-oi-tokio",
@@ -7,6 +9,7 @@ members = [
     "crates/create-oi-dora",
 ]
 default-members = [
+    "crates/create-oi-protocol",
     "crates/create-oi",
     "crates/create-oi-serial",
     "crates/create-oi-tokio",
@@ -19,6 +22,7 @@ repository = "https://github.com/Sanzentyo/libcreate-rs"
 rust-version = "1.85"
 
 [workspace.dependencies]
+create-oi-protocol = { path = "crates/create-oi-protocol" }
 create-oi = { path = "crates/create-oi" }
 thiserror = "2"
 serialport = "4.9"

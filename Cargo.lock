@@ -553,6 +553,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "create-oi"
 version = "0.3.0"
 dependencies = [
+ "create-oi-protocol",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -566,6 +567,13 @@ dependencies = [
  "create-oi-serial",
  "dora-node-api",
  "eyre",
+]
+
+[[package]]
+name = "create-oi-protocol"
+version = "0.3.0"
+dependencies = [
+ "thiserror 2.0.18",
 ]
 
 [[package]]
