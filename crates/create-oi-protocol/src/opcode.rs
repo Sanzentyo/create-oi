@@ -315,6 +315,9 @@ pub const SENSOR_PACKETS: &[PacketInfo] = &[
     }, // stasis
 ];
 
+pub const SENSOR_PACKETS_ID_MIN: u8 = SENSOR_PACKETS[0].id;
+pub const SENSOR_PACKETS_ID_MAX: u8 = SENSOR_PACKETS[SENSOR_PACKETS.len() - 1].id;
+
 /// IDs 7–42 (group 6).
 const GROUP_6_IDS: [u8; 36] = [
     7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
@@ -365,8 +368,8 @@ pub const fn group_data_len(group: u8) -> Option<usize> {
 /// Look up packet info by ID.
 #[inline(always)]
 pub const fn packet_info(id: u8) -> Option<&'static PacketInfo> {
-    if 7 <= id && id <= 58 {
-        Some(&SENSOR_PACKETS[(id - 7) as usize])
+    if SENSOR_PACKETS_ID_MIN <= id && id <= SENSOR_PACKETS_ID_MAX {
+        Some(&SENSOR_PACKETS[(id - SENSOR_PACKETS_ID_MIN) as usize])
     } else {
         None
     }
