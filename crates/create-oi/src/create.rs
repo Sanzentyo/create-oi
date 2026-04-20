@@ -4,6 +4,8 @@
 //! encodes the current OI mode as a type parameter. Commands that require
 //! specific modes are only available on the relevant `Create<Safe, T>` or
 //! `Create<Full, T>` specialisations.
+//!
+//! This module requires the `std` feature (blocking I/O + `thread::sleep`).
 
 use crate::error::{ConnectError, Error, TransitionError};
 use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
@@ -45,7 +47,7 @@ impl<T: Transport> Create<Off, T> {
     }
 
     /// Send the START command and transition to Passive mode.
-    pub fn start(mut self) -> Result<Create<Passive, T>, ConnectError<T>> {
+    pub fn start(mut self) -> Result<Create<Passive, T>, ConnectError<T, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(ConnectError {
                 transport: self.transport,
@@ -63,7 +65,7 @@ impl<T: Transport> Create<Off, T> {
 
 impl<T: Transport> Create<Passive, T> {
     /// Transition to Safe mode.
-    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self>> {
+    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
                 robot: self,
@@ -75,7 +77,7 @@ impl<T: Transport> Create<Passive, T> {
     }
 
     /// Transition to Full mode.
-    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self>> {
+    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
                 robot: self,
@@ -89,7 +91,7 @@ impl<T: Transport> Create<Passive, T> {
 
 impl<T: Transport> Create<Safe, T> {
     /// Transition to Full mode.
-    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self>> {
+    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
                 robot: self,
@@ -101,7 +103,9 @@ impl<T: Transport> Create<Safe, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub fn to_passive(mut self) -> Result<Create<Passive, T>, TransitionError<Self>> {
+    pub fn to_passive(
+        mut self,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
                 robot: self,
@@ -115,7 +119,7 @@ impl<T: Transport> Create<Safe, T> {
 
 impl<T: Transport> Create<Full, T> {
     /// Fall back to Safe mode.
-    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self>> {
+    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
                 robot: self,
@@ -127,7 +131,9 @@ impl<T: Transport> Create<Full, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub fn to_passive(mut self) -> Result<Create<Passive, T>, TransitionError<Self>> {
+    pub fn to_passive(
+        mut self,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
                 robot: self,
@@ -145,21 +151,19 @@ impl<T: Transport> Create<Full, T> {
 
 impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query a single sensor packet by ID and return the raw bytes.
-    pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
+    pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<std::io::Error>> {
         self.send_cmd(&command::encode_sensors(packet_id))?;
 
-        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(format!(
-                "unknown packet id {packet_id}"
-            )))
-        })?;
+        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+        ))?;
         let mut buf = vec![0u8; info.len as usize];
         self.read_exact(&mut buf)?;
         Ok(buf)
     }
 
     /// Query a single sensor packet and decode it.
-    pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error> {
+    pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<std::io::Error>> {
         let raw = self.query_sensor_raw(packet_id)?;
         let mut sd = SensorData::default();
         sd.decode_packet(packet_id, &raw)?;
@@ -167,7 +171,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Query multiple sensors at once and decode all of them.
-    pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error> {
+    pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<std::io::Error>> {
         self.send_cmd(&command::encode_query_list(packet_ids))?;
 
         let expected_len = sensor::expected_data_len(packet_ids)?;
@@ -180,28 +184,25 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Read the robot's current OI mode from sensor data.
-    pub fn read_oi_mode(&mut self) -> Result<OiMode, Error> {
+    pub fn read_oi_mode(&mut self) -> Result<OiMode, Error<std::io::Error>> {
         let sd = self.query_sensor(35)?;
-        sd.oi_mode.ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(
-                "missing OI mode".into(),
-            ))
-        })
+        sd.oi_mode.ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::MissingSensorField { field: "oi_mode" },
+        ))
     }
 
     /// Start streaming the given packet IDs.
-    pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error> {
-        self.stream_parser.set_packet_ids(packet_ids);
+    pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_stream(packet_ids))
     }
 
     /// Pause or resume the sensor stream.
-    pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error> {
+    pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_toggle_stream(enable))
     }
 
     /// Read bytes from the transport and try to parse stream frames.
-    pub fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error> {
+    pub fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error<std::io::Error>> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
@@ -221,7 +222,11 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
 
 impl<M: Actuatable, T: Transport> Create<M, T> {
     /// Drive with a given velocity and radius.
-    pub fn drive(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
+    pub fn drive(
+        &mut self,
+        velocity: Velocity,
+        radius: Radius,
+    ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_drive(
             velocity.to_mm_per_sec(),
             radius.to_mm(),
@@ -229,7 +234,11 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     }
 
     /// Drive wheels directly with individual velocities.
-    pub fn drive_direct(&mut self, right: Velocity, left: Velocity) -> Result<(), Error> {
+    pub fn drive_direct(
+        &mut self,
+        right: Velocity,
+        left: Velocity,
+    ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_drive_direct(
             right.to_mm_per_sec(),
             left.to_mm_per_sec(),
@@ -237,12 +246,16 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     }
 
     /// Drive wheels with PWM values.
-    pub fn drive_pwm(&mut self, right: MotorPower, left: MotorPower) -> Result<(), Error> {
+    pub fn drive_pwm(
+        &mut self,
+        right: MotorPower,
+        left: MotorPower,
+    ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_drive_pwm(right.to_pwm(), left.to_pwm()))
     }
 
     /// Stop all motors (drive 0, 0).
-    pub fn stop(&mut self) -> Result<(), Error> {
+    pub fn stop(&mut self) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_drive(0, 0))
     }
 
@@ -255,25 +268,35 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         check_robot: bool,
         color: PowerLedColor,
         intensity: LedIntensity,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<std::io::Error>> {
         let bits =
             (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3);
         self.send_cmd(&command::encode_leds(bits, color.get(), intensity.get()))
     }
 
     /// Display ASCII characters on the 7-segment displays.
-    pub fn set_digit_leds(&mut self, d3: u8, d2: u8, d1: u8, d0: u8) -> Result<(), Error> {
+    pub fn set_digit_leds(
+        &mut self,
+        d3: u8,
+        d2: u8,
+        d1: u8,
+        d0: u8,
+    ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
     }
 
     /// Define a song.
-    pub fn define_song(&mut self, number: SongNumber, notes: &[(u8, u8)]) -> Result<(), Error> {
+    pub fn define_song(
+        &mut self,
+        number: SongNumber,
+        notes: &[(u8, u8)],
+    ) -> Result<(), Error<std::io::Error>> {
         let cmd = command::encode_song(number.get(), notes);
         self.send_cmd(&cmd)
     }
 
     /// Play a previously defined song.
-    pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error> {
+    pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_play(number.get()))
     }
 
@@ -283,7 +306,7 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
     }
 }
@@ -314,14 +337,14 @@ impl<M: Mode, T: Transport> Create<M, T> {
     }
 
     /// Send raw bytes to the robot.
-    fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error> {
+    fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<std::io::Error>> {
         self.transport.write_all(data).map_err(Error::Io)?;
         self.transport.flush().map_err(Error::Io)?;
         Ok(())
     }
 
     /// Read exactly `buf.len()` bytes from the transport.
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error<std::io::Error>> {
         let mut offset = 0;
         while offset < buf.len() {
             let n = self.transport.read(&mut buf[offset..]).map_err(Error::Io)?;

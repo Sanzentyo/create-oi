@@ -1,6 +1,6 @@
 [package]
 name = "create-oi-tokio"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,12 +10,12 @@ keywords = ["irobot", "create", "roomba", "tokio", "async"]
 categories = ["hardware-support", "asynchronous"]
 
 [dependencies]
-create-oi.workspace = true
+create-oi = { workspace = true, features = ["std"] }
 tokio.workspace = true
 tokio-serial.workspace = true
 
 [dev-dependencies]
-create-oi = { workspace = true }
+create-oi = { workspace = true, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [[example]]

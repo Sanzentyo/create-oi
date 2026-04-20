@@ -1,0 +1,15 @@
+[package]
+name = "create-oi-embassy"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Embassy async transport adapter for create-oi (embedded UART)"
+keywords = ["irobot", "create", "embassy", "embedded", "no_std"]
+categories = ["hardware-support", "embedded", "no-std"]
+
+[dependencies]
+create-oi = { workspace = true, default-features = false }
+embedded-io-async = "0.7"
+embassy-time = "0.5"

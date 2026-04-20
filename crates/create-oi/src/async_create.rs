@@ -19,10 +19,17 @@ use crate::transport::AsyncTransport;
 use crate::types::{
     CreateRobotModel, LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
 };
+use core::marker::PhantomData;
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
-use std::marker::PhantomData;
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 /// An asynchronous robot handle, parameterised by OI mode `M` and transport `T`.
 ///
@@ -53,7 +60,7 @@ impl<T: AsyncTransport> AsyncCreate<Off, T> {
     }
 
     /// Send the START command and transition to Passive mode.
-    pub async fn start(mut self) -> Result<AsyncCreate<Passive, T>, ConnectError<T>> {
+    pub async fn start(mut self) -> Result<AsyncCreate<Passive, T>, ConnectError<T, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(ConnectError {
                 transport: self.transport,
@@ -71,7 +78,9 @@ impl<T: AsyncTransport> AsyncCreate<Off, T> {
 
 impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     /// Transition to Safe mode.
-    pub async fn to_safe(mut self) -> Result<AsyncCreate<Safe, T>, TransitionError<Self>> {
+    pub async fn to_safe(
+        mut self,
+    ) -> Result<AsyncCreate<Safe, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
                 robot: self,
@@ -83,7 +92,9 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     }
 
     /// Transition to Full mode.
-    pub async fn to_full(mut self) -> Result<AsyncCreate<Full, T>, TransitionError<Self>> {
+    pub async fn to_full(
+        mut self,
+    ) -> Result<AsyncCreate<Full, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
                 robot: self,
@@ -97,7 +108,9 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
 
 impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     /// Transition to Full mode.
-    pub async fn to_full(mut self) -> Result<AsyncCreate<Full, T>, TransitionError<Self>> {
+    pub async fn to_full(
+        mut self,
+    ) -> Result<AsyncCreate<Full, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
                 robot: self,
@@ -109,7 +122,9 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub async fn to_passive(mut self) -> Result<AsyncCreate<Passive, T>, TransitionError<Self>> {
+    pub async fn to_passive(
+        mut self,
+    ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
                 robot: self,
@@ -123,7 +138,9 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
 
 impl<T: AsyncTransport> AsyncCreate<Full, T> {
     /// Fall back to Safe mode.
-    pub async fn to_safe(mut self) -> Result<AsyncCreate<Safe, T>, TransitionError<Self>> {
+    pub async fn to_safe(
+        mut self,
+    ) -> Result<AsyncCreate<Safe, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
                 robot: self,
@@ -135,7 +152,9 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub async fn to_passive(mut self) -> Result<AsyncCreate<Passive, T>, TransitionError<Self>> {
+    pub async fn to_passive(
+        mut self,
+    ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
                 robot: self,
@@ -152,65 +171,91 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
 // ---------------------------------------------------------------------------
 
 impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
-    /// Query a single sensor packet by ID and return the raw bytes.
-    pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
+    /// Query a single sensor packet by ID into a caller-provided buffer.
+    ///
+    /// Returns the number of bytes written to `buf`.
+    pub async fn query_sensor_raw_into(
+        &mut self,
+        packet_id: u8,
+        buf: &mut [u8],
+    ) -> Result<usize, Error<T::Error>> {
         self.send_cmd(&command::encode_sensors(packet_id)).await?;
 
-        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(format!(
-                "unknown packet id {packet_id}"
-            )))
-        })?;
+        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+        ))?;
+        let len = info.len as usize;
+        if buf.len() < len {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::BufferTooSmall {
+                    need: len,
+                    got: buf.len(),
+                },
+            ));
+        }
+        self.read_exact(&mut buf[..len]).await?;
+        Ok(len)
+    }
+
+    /// Query a single sensor packet by ID and return the raw bytes.
+    #[cfg(feature = "alloc")]
+    pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<T::Error>> {
+        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+        ))?;
         let mut buf = vec![0u8; info.len as usize];
+        self.send_cmd(&command::encode_sensors(packet_id)).await?;
         self.read_exact(&mut buf).await?;
         Ok(buf)
     }
 
     /// Query a single sensor packet and decode it.
-    pub async fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error> {
-        let raw = self.query_sensor_raw(packet_id).await?;
+    pub async fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<T::Error>> {
+        let mut buf = [0u8; 64]; // largest single packet is well under 64 bytes
+        let len = self.query_sensor_raw_into(packet_id, &mut buf).await?;
         let mut sd = SensorData::default();
-        sd.decode_packet(packet_id, &raw)?;
+        sd.decode_packet(packet_id, &buf[..len])?;
         Ok(sd)
     }
 
     /// Query multiple sensors at once and decode all of them.
-    pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error> {
-        self.send_cmd(&command::encode_query_list(packet_ids))
-            .await?;
+    pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+        let mut cmd_buf = [0u8; 28];
+        let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
+        self.send_cmd(&cmd_buf[..cmd_len]).await?;
 
         let expected_len = sensor::expected_data_len(packet_ids)?;
-        let mut buf = vec![0u8; expected_len];
-        self.read_exact(&mut buf).await?;
+        let mut buf = [0u8; 256];
+        self.read_exact(&mut buf[..expected_len]).await?;
 
         let mut sd = SensorData::default();
-        sd.decode_packets(packet_ids, &buf)?;
+        sd.decode_packets(packet_ids, &buf[..expected_len])?;
         Ok(sd)
     }
 
     /// Read the robot's current OI mode from sensor data.
-    pub async fn read_oi_mode(&mut self) -> Result<OiMode, Error> {
+    pub async fn read_oi_mode(&mut self) -> Result<OiMode, Error<T::Error>> {
         let sd = self.query_sensor(35).await?;
-        sd.oi_mode.ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(
-                "missing OI mode".into(),
-            ))
-        })
+        sd.oi_mode.ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::MissingSensorField { field: "oi_mode" },
+        ))
     }
 
     /// Start streaming the given packet IDs.
-    pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error> {
-        self.stream_parser.set_packet_ids(packet_ids);
-        self.send_cmd(&command::encode_stream(packet_ids)).await
+    pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+        let mut buf = [0u8; 28];
+        let len = command::encode_stream_into(&mut buf, packet_ids)?;
+        self.send_cmd(&buf[..len]).await
     }
 
     /// Pause or resume the sensor stream.
-    pub async fn toggle_stream(&mut self, enable: bool) -> Result<(), Error> {
+    pub async fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_toggle_stream(enable)).await
     }
 
     /// Read bytes from the transport and try to parse stream frames.
-    pub async fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error> {
+    #[cfg(feature = "alloc")]
+    pub async fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error<T::Error>> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).await.map_err(Error::Io)?;
         if n == 0 {
@@ -222,6 +267,21 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
             .map(|r| r.map_err(Error::Protocol))
             .collect()
     }
+
+    /// Read bytes from the transport and parse stream frames via callback.
+    ///
+    /// This is the no-alloc equivalent of [`poll_stream`](Self::poll_stream).
+    pub async fn poll_stream_with(
+        &mut self,
+        callback: impl FnMut(Result<SensorData, create_oi_protocol::error::ProtocolError>),
+    ) -> Result<(), Error<T::Error>> {
+        let mut buf = [0u8; 256];
+        let n = self.transport.read(&mut buf).await.map_err(Error::Io)?;
+        if n > 0 {
+            self.stream_parser.feed_with(&buf[..n], callback);
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +290,11 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
 
 impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Drive with a given velocity and radius.
-    pub async fn drive(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
+    pub async fn drive(
+        &mut self,
+        velocity: Velocity,
+        radius: Radius,
+    ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_drive(
             velocity.to_mm_per_sec(),
             radius.to_mm(),
@@ -239,7 +303,11 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Drive wheels directly with individual velocities.
-    pub async fn drive_direct(&mut self, right: Velocity, left: Velocity) -> Result<(), Error> {
+    pub async fn drive_direct(
+        &mut self,
+        right: Velocity,
+        left: Velocity,
+    ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_drive_direct(
             right.to_mm_per_sec(),
             left.to_mm_per_sec(),
@@ -248,13 +316,17 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Drive wheels with PWM values.
-    pub async fn drive_pwm(&mut self, right: MotorPower, left: MotorPower) -> Result<(), Error> {
+    pub async fn drive_pwm(
+        &mut self,
+        right: MotorPower,
+        left: MotorPower,
+    ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_drive_pwm(right.to_pwm(), left.to_pwm()))
             .await
     }
 
     /// Stop all motors (drive 0, 0).
-    pub async fn stop(&mut self) -> Result<(), Error> {
+    pub async fn stop(&mut self) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_drive(0, 0)).await
     }
 
@@ -267,7 +339,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         check_robot: bool,
         color: PowerLedColor,
         intensity: LedIntensity,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<T::Error>> {
         let bits =
             (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3);
         self.send_cmd(&command::encode_leds(bits, color.get(), intensity.get()))
@@ -275,7 +347,13 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Display ASCII characters on the 7-segment displays.
-    pub async fn set_digit_leds(&mut self, d3: u8, d2: u8, d1: u8, d0: u8) -> Result<(), Error> {
+    pub async fn set_digit_leds(
+        &mut self,
+        d3: u8,
+        d2: u8,
+        d1: u8,
+        d0: u8,
+    ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
             .await
     }
@@ -285,13 +363,14 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         &mut self,
         number: SongNumber,
         notes: &[(u8, u8)],
-    ) -> Result<(), Error> {
-        let cmd = command::encode_song(number.get(), notes);
-        self.send_cmd(&cmd).await
+    ) -> Result<(), Error<T::Error>> {
+        let mut buf = [0u8; 35]; // max song: 2 header + 16 notes * 2 bytes = 34
+        let len = command::encode_song_into(&mut buf, number.get(), notes)?;
+        self.send_cmd(&buf[..len]).await
     }
 
     /// Play a previously defined song.
-    pub async fn play_song(&mut self, number: SongNumber) -> Result<(), Error> {
+    pub async fn play_song(&mut self, number: SongNumber) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_play(number.get())).await
     }
 
@@ -301,7 +380,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
             .await
     }
@@ -333,14 +412,14 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Send raw bytes to the robot.
-    async fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error> {
+    async fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<T::Error>> {
         self.transport.write_all(data).await.map_err(Error::Io)?;
         self.transport.flush().await.map_err(Error::Io)?;
         Ok(())
     }
 
     /// Read exactly `buf.len()` bytes from the transport.
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error<T::Error>> {
         let mut offset = 0;
         while offset < buf.len() {
             let n = self
@@ -362,7 +441,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     async fn sleep_mode_change(&self) {
-        self.transport.sleep(self.model.mode_change_delay()).await;
+        self.transport.delay(self.model.mode_change_delay()).await;
     }
 
     /// Transition to a different mode (zero-cost: just changes the type parameter).

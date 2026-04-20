@@ -4,6 +4,13 @@
 //! [Open Interface (OI)](https://www.irobot.com/about-irobot/stem/create-2)
 //! protocol.
 //!
+//! ## Features
+//!
+//! - `std` (default) — enables the sync [`Create`](create::Create) API and
+//!   the `std`-based [`Transport`](transport::Transport) trait.
+//! - `alloc` — enables `Vec`-returning convenience methods on `AsyncCreate`.
+//! - *(no features)* — pure `no_std` async API only; suitable for Embassy.
+//!
 //! ## Design
 //!
 //! - **Sans-IO**: Protocol encoding and decoding work on plain `&[u8]`
@@ -16,7 +23,7 @@
 //!   - This crate — TypeState control API + transport abstraction
 //!   - `create-oi-serial`, `create-oi-tokio`, `create-oi-smol` — transports
 //!
-//! ## Quick Start (sync)
+//! ## Quick Start (sync, requires `std` feature)
 //!
 //! ```rust,ignore
 //! use create_oi::prelude::*;
@@ -27,7 +34,6 @@
 //! let robot = Create::new(transport, CreateRobotModel::Create2);
 //! let robot = robot.start()?;          // Off → Passive
 //! let robot = robot.to_safe()?;        // Passive → Safe
-//! // robot.drive(Velocity::new(0.1)?, Radius::STRAIGHT)?;
 //! ```
 //!
 //! ## Quick Start (async / tokio)
@@ -41,10 +47,15 @@
 //! let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
 //! let robot = robot.start().await?;    // Off → Passive
 //! let robot = robot.to_safe().await?;  // Passive → Safe
-//! // robot.drive(Velocity::new(0.1)?, Radius::STRAIGHT).await?;
 //! ```
 
+#![cfg_attr(not(feature = "std"), no_std)]
+// TransitionError/ConnectError intentionally store the robot/transport handle
+// for recovery, making them large. This is by design.
+#![allow(clippy::result_large_err)]
+
 pub mod async_create;
+#[cfg(feature = "std")]
 pub mod create;
 pub mod error;
 pub mod mode;
@@ -57,10 +68,13 @@ pub use create_oi_protocol as protocol;
 /// Convenient re-exports for common usage.
 pub mod prelude {
     pub use crate::async_create::AsyncCreate;
+    #[cfg(feature = "std")]
     pub use crate::create::Create;
     pub use crate::error::{ConnectError, Error, TransitionError};
     pub use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
-    pub use crate::transport::{AsyncTransport, Transport};
+    pub use crate::transport::AsyncTransport;
+    #[cfg(feature = "std")]
+    pub use crate::transport::Transport;
     pub use crate::types::{
         CreateRobotModel, LedIntensity, MotorPower, PowerLedColor, Radius, SongNumber, Velocity,
     };

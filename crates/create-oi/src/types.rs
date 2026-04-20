@@ -3,9 +3,9 @@
 //! Wire-level types (`OiMode`, `ChargingState`, `IrChar`, etc.) live in
 //! [`create_oi_protocol::types`] and are re-exported from `crate::protocol::types`.
 
-use std::time::Duration;
+use core::time::Duration;
 
-use crate::error::Error;
+use crate::error::ValidationError;
 
 // Re-export wire-level types for convenience
 pub use create_oi_protocol::types::{ChargingState, CleanMode, DayOfWeek, IrChar, OiMode};
@@ -145,7 +145,7 @@ impl Velocity {
     /// Maximum raw OI velocity in mm/s (for reference).
     pub const MAX_MM_S: i16 = OI_MAX_VELOCITY_MM_S;
 
-    pub fn new(value: f32) -> Result<Self, Error> {
+    pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("Velocity", value)?;
         validate_range("Velocity", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
@@ -157,12 +157,12 @@ impl Velocity {
 
     /// Convert to mm/s as i16 for the OI protocol (rounds to nearest).
     pub fn to_mm_per_sec(self) -> i16 {
-        (self.0 * M_TO_MM).round() as i16
+        libm::roundf(self.0 * M_TO_MM) as i16
     }
 }
 
 impl TryFrom<f32> for Velocity {
-    type Error = Error;
+    type Error = ValidationError;
     fn try_from(v: f32) -> Result<Self, Self::Error> {
         Self::new(v)
     }
@@ -173,10 +173,10 @@ impl TryFrom<f32> for Velocity {
 pub struct AngularVelocity(f32);
 
 impl AngularVelocity {
-    pub const MAX: f32 = std::f32::consts::PI;
-    pub const MIN: f32 = -std::f32::consts::PI;
+    pub const MAX: f32 = core::f32::consts::PI;
+    pub const MIN: f32 = -core::f32::consts::PI;
 
-    pub fn new(value: f32) -> Result<Self, Error> {
+    pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("AngularVelocity", value)?;
         validate_range("AngularVelocity", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
@@ -226,20 +226,18 @@ impl Radius {
     /// Valid range: [-2.0, 2.0] m. Values of exactly `0.001` (1 mm) or
     /// `-0.001` (-1 mm) are rejected because they collide with OI special
     /// values; use [`Radius::TurnInPlaceCcw`] or [`Radius::TurnInPlaceCw`].
-    pub fn new(value: f32) -> Result<Self, Error> {
+    pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("Radius", value)?;
         validate_range("Radius", value, Self::MIN_CURVE_M, Self::MAX_CURVE_M)?;
-        let raw_mm = (value * M_TO_MM).round() as i16;
+        let raw_mm = libm::roundf(value * M_TO_MM) as i16;
         // Reject raw values that collide with protocol specials
         if raw_mm == OI_RADIUS_STRAIGHT_RAW
             || raw_mm == OI_RADIUS_TURN_CW_RAW
             || raw_mm == OI_RADIUS_TURN_CCW_RAW
         {
-            return Err(Error::InvalidValue {
+            return Err(ValidationError {
                 field: "Radius",
-                reason: format!(
-                    "{value} m maps to reserved OI value {raw_mm}; use Radius::Straight/TurnInPlaceCw/TurnInPlaceCcw"
-                ),
+                reason: "value maps to reserved OI special; use Radius::Straight/TurnInPlaceCw/TurnInPlaceCcw",
             });
         }
         Ok(Self::Curve(value))
@@ -260,7 +258,7 @@ impl Radius {
             Self::Straight => OI_RADIUS_STRAIGHT_RAW,
             Self::TurnInPlaceCw => OI_RADIUS_TURN_CW_RAW,
             Self::TurnInPlaceCcw => OI_RADIUS_TURN_CCW_RAW,
-            Self::Curve(m) => (m * M_TO_MM).round() as i16,
+            Self::Curve(m) => libm::roundf(m * M_TO_MM) as i16,
         }
     }
 }
@@ -274,7 +272,7 @@ impl MotorPower {
     pub const MIN: f32 = -1.0;
     pub const OFF: Self = Self(0.0);
 
-    pub fn new(value: f32) -> Result<Self, Error> {
+    pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("MotorPower", value)?;
         validate_range("MotorPower", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
@@ -286,7 +284,7 @@ impl MotorPower {
 
     /// Convert to PWM value (-255..255) for the OI protocol (rounds to nearest).
     pub fn to_pwm(self) -> i16 {
-        (self.0 * OI_MAX_PWM as f32).round() as i16
+        libm::roundf(self.0 * OI_MAX_PWM as f32) as i16
     }
 }
 
@@ -341,11 +339,11 @@ impl From<u8> for LedIntensity {
 pub struct SongNumber(u8);
 
 impl SongNumber {
-    pub fn new(value: u8) -> Result<Self, Error> {
+    pub fn new(value: u8) -> Result<Self, ValidationError> {
         if value > OI_MAX_SONG_NUMBER {
-            return Err(Error::InvalidValue {
+            return Err(ValidationError {
                 field: "SongNumber",
-                reason: format!("{value} > {OI_MAX_SONG_NUMBER}"),
+                reason: "song number exceeds maximum (3)",
             });
         }
         Ok(Self(value))
@@ -357,7 +355,7 @@ impl SongNumber {
 }
 
 impl TryFrom<u8> for SongNumber {
-    type Error = Error;
+    type Error = ValidationError;
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         Self::new(v)
     }
@@ -367,21 +365,26 @@ impl TryFrom<u8> for SongNumber {
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-fn validate_finite(field: &'static str, value: f32) -> Result<(), Error> {
+fn validate_finite(field: &'static str, value: f32) -> Result<(), ValidationError> {
     if !value.is_finite() {
-        return Err(Error::InvalidValue {
+        return Err(ValidationError {
             field,
-            reason: format!("must be finite, got {value}"),
+            reason: "must be finite",
         });
     }
     Ok(())
 }
 
-fn validate_range(field: &'static str, value: f32, min: f32, max: f32) -> Result<(), Error> {
+fn validate_range(
+    field: &'static str,
+    value: f32,
+    min: f32,
+    max: f32,
+) -> Result<(), ValidationError> {
     if value < min || value > max {
-        return Err(Error::InvalidValue {
+        return Err(ValidationError {
             field,
-            reason: format!("{value} not in [{min}, {max}]"),
+            reason: "out of valid range",
         });
     }
     Ok(())

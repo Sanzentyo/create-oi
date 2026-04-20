@@ -1,6 +1,6 @@
 [package]
 name = "create-oi-protocol"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,5 +9,9 @@ description = "Sans-IO wire protocol for the iRobot Create/Roomba Open Interface
 keywords = ["irobot", "create", "roomba", "protocol", "sans-io"]
 categories = ["embedded", "no-std::no-alloc"]
 
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
 [dependencies]
-thiserror.workspace = true

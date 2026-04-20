@@ -10,11 +10,11 @@ keywords = ["irobot", "create", "roomba", "serial"]
 categories = ["hardware-support"]
 
 [dependencies]
-create-oi.workspace = true
+create-oi = { workspace = true, features = ["std"] }
 serialport.workspace = true
 
 [dev-dependencies]
-create-oi = { workspace = true }
+create-oi = { workspace = true, features = ["std"] }
 
 [[example]]
 name = "basic_sync"

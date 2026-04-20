@@ -7,6 +7,7 @@ members = [
     "crates/create-oi-tokio",
     "crates/create-oi-smol",
     "crates/create-oi-dora",
+    "crates/create-oi-embassy",
 ]
 default-members = [
     "crates/create-oi-protocol",
@@ -22,8 +23,8 @@ repository = "https://github.com/Sanzentyo/create-oi"
 rust-version = "1.85"
 
 [workspace.dependencies]
-create-oi-protocol = { path = "crates/create-oi-protocol" }
-create-oi = { path = "crates/create-oi" }
+create-oi-protocol = { path = "crates/create-oi-protocol", default-features = false }
+create-oi = { path = "crates/create-oi", default-features = false }
 thiserror = "2"
 serialport = "4.9"
 tokio = { version = "1", features = ["io-util", "time", "rt"] }

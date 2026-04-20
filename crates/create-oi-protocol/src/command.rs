@@ -2,7 +2,15 @@
 //!
 //! Each function returns a fixed-size byte array — zero allocation, zero copy.
 //! The caller passes these bytes to a transport for transmission.
+//!
+//! Variable-length commands (song, query_list, stream) have two variants:
+//! - `encode_*_into(buf, ...)` — writes into a caller-provided buffer (always available)
+//! - `encode_*(...)` — returns a `Vec<u8>` (requires `alloc` feature)
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
+use crate::error::ProtocolError;
 use crate::opcode::Opcode;
 
 /// Start the OI. Transitions to Passive mode.
@@ -113,9 +121,39 @@ pub fn encode_digit_leds_ascii(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
     [Opcode::DigitLedsAscii as u8, d3, d2, d1, d0]
 }
 
-/// Define a song.
+/// Define a song. Writes into `buf` and returns the number of bytes written.
+///
 /// `song_number`: 0-3
 /// `notes`: pairs of (MIDI note, duration_64ths)
+///
+/// Required buffer size: `3 + notes.len() * 2`
+pub fn encode_song_into(
+    buf: &mut [u8],
+    song_number: u8,
+    notes: &[(u8, u8)],
+) -> Result<usize, ProtocolError> {
+    let need = 3 + notes.len() * 2;
+    if buf.len() < need {
+        return Err(ProtocolError::BufferTooSmall {
+            need,
+            got: buf.len(),
+        });
+    }
+    buf[0] = Opcode::Song as u8;
+    buf[1] = song_number;
+    buf[2] = notes.len() as u8;
+    for (i, &(note, duration)) in notes.iter().enumerate() {
+        buf[3 + i * 2] = note;
+        buf[3 + i * 2 + 1] = duration;
+    }
+    Ok(need)
+}
+
+/// Define a song. Returns a `Vec<u8>`.
+///
+/// `song_number`: 0-3
+/// `notes`: pairs of (MIDI note, duration_64ths)
+#[cfg(feature = "alloc")]
 pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(3 + notes.len() * 2);
     buf.push(Opcode::Song as u8);
@@ -138,7 +176,25 @@ pub fn encode_sensors(packet_id: u8) -> [u8; 2] {
     [Opcode::Sensors as u8, packet_id]
 }
 
-/// Request multiple sensor packets (query list).
+/// Request multiple sensor packets (query list). Writes into `buf`.
+///
+/// Required buffer size: `2 + packet_ids.len()`
+pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    let need = 2 + packet_ids.len();
+    if buf.len() < need {
+        return Err(ProtocolError::BufferTooSmall {
+            need,
+            got: buf.len(),
+        });
+    }
+    buf[0] = Opcode::QueryList as u8;
+    buf[1] = packet_ids.len() as u8;
+    buf[2..need].copy_from_slice(packet_ids);
+    Ok(need)
+}
+
+/// Request multiple sensor packets (query list). Returns a `Vec<u8>`.
+#[cfg(feature = "alloc")]
 pub fn encode_query_list(packet_ids: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::QueryList as u8);
@@ -147,7 +203,25 @@ pub fn encode_query_list(packet_ids: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Start a sensor stream with the given packet IDs.
+/// Start a sensor stream with the given packet IDs. Writes into `buf`.
+///
+/// Required buffer size: `2 + packet_ids.len()`
+pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    let need = 2 + packet_ids.len();
+    if buf.len() < need {
+        return Err(ProtocolError::BufferTooSmall {
+            need,
+            got: buf.len(),
+        });
+    }
+    buf[0] = Opcode::Stream as u8;
+    buf[1] = packet_ids.len() as u8;
+    buf[2..need].copy_from_slice(packet_ids);
+    Ok(need)
+}
+
+/// Start a sensor stream with the given packet IDs. Returns a `Vec<u8>`.
+#[cfg(feature = "alloc")]
 pub fn encode_stream(packet_ids: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::Stream as u8);

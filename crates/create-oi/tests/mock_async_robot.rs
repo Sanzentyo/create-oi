@@ -44,7 +44,9 @@ impl MockAsyncTransport {
 }
 
 impl AsyncTransport for MockAsyncTransport {
-    async fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
+    type Error = io::Error;
+
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
         if self.closed {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
         }
@@ -52,7 +54,7 @@ impl AsyncTransport for MockAsyncTransport {
         Ok(())
     }
 
-    async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if self.closed {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
         }
@@ -66,16 +68,11 @@ impl AsyncTransport for MockAsyncTransport {
         Ok(n)
     }
 
-    async fn flush(&mut self) -> io::Result<()> {
+    async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    async fn close(&mut self) -> io::Result<()> {
-        self.closed = true;
-        Ok(())
-    }
-
-    async fn sleep(&self, _duration: Duration) {
+    async fn delay(&self, _duration: Duration) {
         // No-op in tests — no real delay needed.
     }
 }
