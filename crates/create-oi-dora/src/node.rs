@@ -15,7 +15,7 @@ pub struct CreateNodeConfig {
     /// Serial port path (e.g. `/dev/ttyUSB0`).
     pub port: String,
     /// Robot model.
-    pub model: RobotModel,
+    pub model: CreateRobotModel,
     /// Sensor packet IDs to poll on each tick.
     pub sensor_ids: Vec<u8>,
 }
@@ -24,7 +24,7 @@ impl Default for CreateNodeConfig {
     fn default() -> Self {
         Self {
             port: "/dev/ttyUSB0".into(),
-            model: RobotModel::Create2,
+            model: CreateRobotModel::Create2,
             // Default: bumps+wheeldrops(7), wall(8), cliff sensors(9-12),
             // voltage(22), current(23), temperature(24), charge(25), capacity(26)
             sensor_ids: vec![7, 8, 9, 10, 11, 12, 22, 23, 24, 25, 26],

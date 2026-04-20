@@ -62,7 +62,7 @@ pub mod prelude {
     pub use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
     pub use crate::transport::{AsyncTransport, Transport};
     pub use crate::types::{
-        LedIntensity, MotorPower, PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
+        LedIntensity, MotorPower, PowerLedColor, Radius, CreateRobotModel, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports

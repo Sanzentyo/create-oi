@@ -17,7 +17,7 @@ use crate::error::{ConnectError, Error, TransitionError};
 use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::AsyncTransport;
 use crate::types::{
-    LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
+    LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, CreateRobotModel, SongNumber, Velocity,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
@@ -31,7 +31,7 @@ use std::marker::PhantomData;
 #[derive(Debug)]
 pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
     transport: T,
-    model: RobotModel,
+    model: CreateRobotModel,
     stream_parser: StreamParser,
     _mode: PhantomData<M>,
 }
@@ -43,7 +43,7 @@ pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
 impl<T: AsyncTransport> AsyncCreate<Off, T> {
     /// Create a new async robot handle wrapping the given transport.
     /// The robot is assumed to be in the `Off` state.
-    pub fn new(transport: T, model: RobotModel) -> Self {
+    pub fn new(transport: T, model: CreateRobotModel) -> Self {
         Self {
             transport,
             model,
@@ -313,7 +313,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
 
 impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     /// Get the robot model.
-    pub fn model(&self) -> RobotModel {
+    pub fn model(&self) -> CreateRobotModel {
         self.model
     }
 

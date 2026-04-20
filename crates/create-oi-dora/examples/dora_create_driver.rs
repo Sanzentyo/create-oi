@@ -23,9 +23,9 @@ fn main() -> Result<()> {
     let port = std::env::var("CREATE_PORT").unwrap_or_else(|_| "/dev/ttyUSB0".into());
 
     eprintln!("[create_driver] Opening {port} for Create 2...");
-    let transport = SerialTransport::open(&port, RobotModel::Create2)?;
+    let transport = SerialTransport::open(&port, CreateRobotModel::Create2)?;
 
-    let robot = Create::new(transport, RobotModel::Create2);
+    let robot = Create::new(transport, CreateRobotModel::Create2);
     let robot = robot.start().map_err(|e| e.source)?;
     let mut robot = robot.to_safe().map_err(|e| e.source)?;
 

@@ -13,9 +13,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "/dev/ttyUSB0".into());
 
     println!("Opening {port} (async)...");
-    let transport = TokioTransport::open(&port, RobotModel::Create2)?;
+    let transport = TokioTransport::open(&port, CreateRobotModel::Create2)?;
 
-    let robot = AsyncCreate::new(transport, RobotModel::Create2);
+    let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
     let robot = robot.start().await.map_err(|e| e.source)?;
 
     let mut robot = robot.to_safe().await.map_err(|e| e.source)?;

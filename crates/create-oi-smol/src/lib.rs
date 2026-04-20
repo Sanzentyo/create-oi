@@ -9,7 +9,7 @@
 
 use std::io;
 
-use create_oi::types::RobotModel;
+use create_oi::types::CreateRobotModel;
 
 /// Re-export core types for convenience.
 pub use create_oi;
@@ -33,7 +33,7 @@ impl SmolTransport {
     /// # Note
     /// This currently requires `unsafe` to extract the raw fd from the serial port.
     /// We gate behind a feature flag and document this caveat.
-    pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
+    pub fn open(path: &str, model: CreateRobotModel) -> io::Result<Self> {
         let _inner = create_oi_serial::SerialTransport::open(path, model)?;
         // async-io::Async requires the inner type to implement AsRawFd (Unix)
         // or AsRawSocket (Windows). Since SerialTransport wraps Box<dyn SerialPort>,

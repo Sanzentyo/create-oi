@@ -94,7 +94,7 @@ impl Transport for MockTransport {
 #[test]
 fn robot_start_sends_start_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
 
     // start() transitions Off → Passive
     let robot = robot.start().unwrap();
@@ -105,7 +105,7 @@ fn robot_start_sends_start_opcode() {
 #[test]
 fn robot_passive_to_safe_sends_safe_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap();
 
     let robot = robot.to_safe().unwrap();
@@ -117,7 +117,7 @@ fn robot_passive_to_safe_sends_safe_opcode() {
 #[test]
 fn robot_passive_to_full_sends_full_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap();
 
     let robot = robot.to_full().unwrap();
@@ -128,7 +128,7 @@ fn robot_passive_to_full_sends_full_opcode() {
 #[test]
 fn robot_safe_to_full() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap().to_safe().unwrap();
 
     let robot = robot.to_full().unwrap();
@@ -139,7 +139,7 @@ fn robot_safe_to_full() {
 #[test]
 fn robot_full_to_safe() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap().to_full().unwrap();
 
     let robot = robot.to_safe().unwrap();
@@ -150,7 +150,7 @@ fn robot_full_to_safe() {
 #[test]
 fn robot_full_to_passive() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap().to_full().unwrap();
 
     let robot = robot.to_passive().unwrap();
@@ -166,7 +166,7 @@ fn robot_full_to_passive() {
 fn query_single_sensor() {
     // OI mode (packet 35) = 2 (Safe), 1 byte response
     let mock = MockTransport::with_read_data(&[2]);
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().unwrap();
 
     let sd = robot.query_sensor(35).unwrap();
@@ -181,7 +181,7 @@ fn query_single_sensor() {
 fn query_list_multiple_sensors() {
     // wall(id=8, 1 byte) = 1, voltage(id=22, 2 bytes) = 12500 (0x30D4)
     let mock = MockTransport::with_read_data(&[1, 0x30, 0xD4]);
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().unwrap();
 
     let sd = robot.query_list(&[8, 22]).unwrap();
@@ -196,7 +196,7 @@ fn query_list_multiple_sensors() {
 #[test]
 fn drive_sends_correct_bytes() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().unwrap().to_safe().unwrap();
 
     let v = Velocity::new(0.2).unwrap();
@@ -217,7 +217,7 @@ fn drive_sends_correct_bytes() {
 #[test]
 fn stop_sends_zero_drive() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().unwrap().to_safe().unwrap();
 
     robot.stop().unwrap();
@@ -235,7 +235,7 @@ fn stop_sends_zero_drive() {
 #[test]
 fn set_leds_sends_correct_bytes() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().unwrap().to_safe().unwrap();
 
     robot
@@ -269,7 +269,7 @@ fn connect_error_returns_transport() {
         closed: true,
         ..MockTransport::new()
     };
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
 
     let err = robot.start().unwrap_err();
     // We get the transport back
@@ -285,7 +285,7 @@ fn transition_error_returns_robot() {
     // Verify that TransitionError<Robot<Passive, MockTransport>> compiles.
     // This is a compile-time check — the type system is the test.
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let _robot = robot.start().unwrap();
 }
 
@@ -296,7 +296,7 @@ fn transition_error_returns_robot() {
 #[test]
 fn into_transport_recovers() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, RobotModel::Create2);
+    let robot = Create::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().unwrap();
     let transport = robot.into_transport();
     assert_eq!(transport.written_bytes(), &[128]); // START was written

@@ -7,7 +7,7 @@ use std::io;
 use std::time::Duration;
 
 use create_oi::transport::Transport;
-use create_oi::types::RobotModel;
+use create_oi::types::CreateRobotModel;
 
 /// Re-export core types for convenience.
 pub use create_oi;
@@ -20,7 +20,7 @@ pub struct SerialTransport {
 
 impl SerialTransport {
     /// Open a serial port with settings appropriate for the given robot model.
-    pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
+    pub fn open(path: &str, model: CreateRobotModel) -> io::Result<Self> {
         let port = serialport::new(path, model.baud())
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)

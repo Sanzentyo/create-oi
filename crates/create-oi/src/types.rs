@@ -16,7 +16,7 @@ pub use create_oi_protocol::types::{ChargingState, CleanMode, DayOfWeek, IrChar,
 
 /// Physical robot model, determining protocol version and physical parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RobotModel {
+pub enum CreateRobotModel {
     /// Roomba 400 series and earlier (protocol V1).
     Roomba400,
     /// iRobot Create 1 / Roomba 500 series (protocol V2).
@@ -25,7 +25,7 @@ pub enum RobotModel {
     Create2,
 }
 
-impl RobotModel {
+impl CreateRobotModel {
     /// Default baud rate for this model.
     pub fn baud(self) -> u32 {
         match self {
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn robot_model_baud() {
-        assert_eq!(RobotModel::Create2.baud(), 115200);
-        assert_eq!(RobotModel::Create1.baud(), 57600);
+        assert_eq!(CreateRobotModel::Create2.baud(), 115200);
+        assert_eq!(CreateRobotModel::Create1.baud(), 57600);
     }
 }

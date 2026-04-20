@@ -87,7 +87,7 @@ impl AsyncTransport for MockAsyncTransport {
 #[tokio::test]
 async fn async_robot_start_sends_start_opcode() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
 
     let robot = robot.start().await.unwrap();
     let written = robot.transport().written_bytes();
@@ -97,7 +97,7 @@ async fn async_robot_start_sends_start_opcode() {
 #[tokio::test]
 async fn async_passive_to_safe() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap();
 
     let robot = robot.to_safe().await.unwrap();
@@ -108,7 +108,7 @@ async fn async_passive_to_safe() {
 #[tokio::test]
 async fn async_passive_to_full() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap();
 
     let robot = robot.to_full().await.unwrap();
@@ -119,7 +119,7 @@ async fn async_passive_to_full() {
 #[tokio::test]
 async fn async_safe_to_full() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap().to_safe().await.unwrap();
 
     let robot = robot.to_full().await.unwrap();
@@ -130,7 +130,7 @@ async fn async_safe_to_full() {
 #[tokio::test]
 async fn async_full_to_safe() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap().to_full().await.unwrap();
 
     let robot = robot.to_safe().await.unwrap();
@@ -141,7 +141,7 @@ async fn async_full_to_safe() {
 #[tokio::test]
 async fn async_full_to_passive() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap().to_full().await.unwrap();
 
     let robot = robot.to_passive().await.unwrap();
@@ -157,7 +157,7 @@ async fn async_full_to_passive() {
 async fn async_query_single_sensor() {
     // OI mode (packet 35) = 2 (Safe), 1 byte response
     let mock = MockAsyncTransport::with_read_data(&[2]);
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap();
 
     let sd = robot.query_sensor(35).await.unwrap();
@@ -172,7 +172,7 @@ async fn async_query_single_sensor() {
 async fn async_query_list_multiple_sensors() {
     // wall(id=8, 1 byte) = 1, voltage(id=22, 2 bytes) = 12500 (0x30D4)
     let mock = MockAsyncTransport::with_read_data(&[1, 0x30, 0xD4]);
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap();
 
     let sd = robot.query_list(&[8, 22]).await.unwrap();
@@ -187,7 +187,7 @@ async fn async_query_list_multiple_sensors() {
 #[tokio::test]
 async fn async_drive_sends_correct_bytes() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
 
     let v = Velocity::new(0.2).unwrap();
@@ -207,7 +207,7 @@ async fn async_drive_sends_correct_bytes() {
 #[tokio::test]
 async fn async_stop_sends_zero_drive() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
 
     robot.stop().await.unwrap();
@@ -224,7 +224,7 @@ async fn async_stop_sends_zero_drive() {
 #[tokio::test]
 async fn async_set_leds() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
 
     robot
@@ -257,7 +257,7 @@ async fn async_connect_error_returns_transport() {
         closed: true,
         ..MockAsyncTransport::new()
     };
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
 
     let err = robot.start().await.unwrap_err();
     assert!(err.transport.closed);
@@ -270,7 +270,7 @@ async fn async_connect_error_returns_transport() {
 #[tokio::test]
 async fn async_into_transport_recovers() {
     let mock = MockAsyncTransport::new();
-    let robot = AsyncCreate::new(mock, RobotModel::Create2);
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let robot = robot.start().await.unwrap();
     let transport = robot.into_transport();
     assert_eq!(transport.written_bytes(), &[128]); // START was written
