@@ -97,11 +97,14 @@ All domain values are proper Rust enums/newtypes:
 ## Validated Newtypes
 
 Physical quantities use validated newtypes with private inner fields:
-- `Velocity(f32)` — range [-0.5, 0.5] m/s
+- `Velocity(f32)` — range [-0.5, 0.5] m/s, rounds to nearest mm/s for OI
 - `AngularVelocity(f32)` — range [-π, π] rad/s
-- `Radius(f32)` — range [-2.0, 2.0] m
-- `MotorPower(f32)` — range [-1.0, 1.0]
-- All reject NaN/infinity via `new()` and `TryFrom<f32>`
+- `Radius` — enum: `Straight | TurnInPlaceCw | TurnInPlaceCcw | Curve(f32)`
+  - `Curve` range: [-2.0, 2.0] m; special OI values are distinct variants
+  - `to_mm()` maps directly to OI protocol i16 (0x7FFF for straight, ±1 for in-place)
+- `MotorPower(f32)` — range [-1.0, 1.0], rounds to nearest PWM value
+- All float newtypes reject NaN/infinity via `new()` and `TryFrom<f32>`
+- All protocol constants (velocities, radii, PWM limits) are named with doc comments
 
 ## Crates
 

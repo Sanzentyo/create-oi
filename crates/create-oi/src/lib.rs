@@ -21,10 +21,10 @@
 //! ```rust,ignore
 //! use create_oi::prelude::*;
 //! use create_oi_serial::SerialTransport;
-//! use create_oi::types::RobotModel;
+//! use create_oi::types::CreateRobotModel;
 //!
-//! let transport = SerialTransport::open("/dev/ttyUSB0", RobotModel::Create2)?;
-//! let robot = Create::new(transport, RobotModel::Create2);
+//! let transport = SerialTransport::open("/dev/ttyUSB0", CreateRobotModel::Create2)?;
+//! let robot = Create::new(transport, CreateRobotModel::Create2);
 //! let robot = robot.start()?;          // Off → Passive
 //! let robot = robot.to_safe()?;        // Passive → Safe
 //! // robot.drive(Velocity::new(0.1)?, Radius::STRAIGHT)?;
@@ -35,10 +35,10 @@
 //! ```rust,ignore
 //! use create_oi::prelude::*;
 //! use create_oi_tokio::TokioTransport;
-//! use create_oi::types::RobotModel;
+//! use create_oi::types::CreateRobotModel;
 //!
-//! let transport = TokioTransport::open("/dev/ttyUSB0", RobotModel::Create2)?;
-//! let robot = AsyncCreate::new(transport, RobotModel::Create2);
+//! let transport = TokioTransport::open("/dev/ttyUSB0", CreateRobotModel::Create2)?;
+//! let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
 //! let robot = robot.start().await?;    // Off → Passive
 //! let robot = robot.to_safe().await?;  // Passive → Safe
 //! // robot.drive(Velocity::new(0.1)?, Radius::STRAIGHT).await?;
@@ -62,7 +62,7 @@ pub mod prelude {
     pub use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
     pub use crate::transport::{AsyncTransport, Transport};
     pub use crate::types::{
-        LedIntensity, MotorPower, PowerLedColor, Radius, CreateRobotModel, SongNumber, Velocity,
+        CreateRobotModel, LedIntensity, MotorPower, PowerLedColor, Radius, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports

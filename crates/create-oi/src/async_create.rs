@@ -17,7 +17,7 @@ use crate::error::{ConnectError, Error, TransitionError};
 use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::AsyncTransport;
 use crate::types::{
-    LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, CreateRobotModel, SongNumber, Velocity,
+    CreateRobotModel, LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
