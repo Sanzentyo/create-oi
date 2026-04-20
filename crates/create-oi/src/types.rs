@@ -83,6 +83,7 @@ pub enum CreateRobotModel {
 
 impl CreateRobotModel {
     /// Default baud rate for this model.
+    #[inline(always)]
     pub const fn baud(self) -> u32 {
         match self {
             Self::Roomba400 | Self::Create1 => BAUD_RATE_V1_V2,
@@ -91,6 +92,7 @@ impl CreateRobotModel {
     }
 
     /// Axle length in meters (distance between wheels).
+    #[inline(always)]
     pub const fn axle_length(self) -> f32 {
         match self {
             Self::Roomba400 | Self::Create1 => AXLE_LENGTH_CREATE1_M,
@@ -99,16 +101,19 @@ impl CreateRobotModel {
     }
 
     /// Maximum forward velocity in m/s.
+    #[inline(always)]
     pub const fn max_velocity(self) -> f32 {
         MAX_VELOCITY_M_S
     }
 
     /// Wheel diameter in meters.
+    #[inline(always)]
     pub const fn wheel_diameter(self) -> f32 {
         WHEEL_DIAMETER_M
     }
 
     /// Encoder ticks per revolution (Create 2 / V3 only).
+    #[inline(always)]
     pub const fn ticks_per_rev(self) -> Option<f32> {
         match self {
             Self::Create2 => Some(TICKS_PER_REV_CREATE2),
@@ -118,6 +123,7 @@ impl CreateRobotModel {
 
     /// Whether this model supports the sensor stream protocol.
     #[allow(clippy::match_like_matches_macro)]
+    #[inline(always)]
     pub const fn supports_stream(self) -> bool {
         match self {
             Self::Create1 | Self::Create2 => true,
@@ -126,6 +132,7 @@ impl CreateRobotModel {
     }
 
     /// Recommended delay after sending a mode-change command.
+    #[inline(always)]
     pub const fn mode_change_delay(self) -> Duration {
         Duration::from_millis(MODE_CHANGE_DELAY_MS)
     }
@@ -155,6 +162,7 @@ impl Velocity {
         Ok(Self(value))
     }
 
+    #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
     }
@@ -186,6 +194,7 @@ impl AngularVelocity {
         Ok(Self(value))
     }
 
+    #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
     }
@@ -249,6 +258,7 @@ impl Radius {
 
     /// Get the physical radius in meters, if this is a curve.
     /// Returns `None` for special values (Straight, TurnInPlaceCw/Ccw).
+    #[inline(always)]
     pub const fn as_meters(self) -> Option<f32> {
         match self {
             Self::Curve(v) => Some(v),
@@ -282,6 +292,7 @@ impl MotorPower {
         Ok(Self(value))
     }
 
+    #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
     }
@@ -300,16 +311,19 @@ impl PowerLedColor {
     pub const GREEN: Self = Self(0);
     pub const RED: Self = Self(255);
 
+    #[inline(always)]
     pub const fn new(value: u8) -> Self {
         Self(value)
     }
 
+    #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
     }
 }
 
 impl From<u8> for PowerLedColor {
+    #[inline(always)]
     fn from(v: u8) -> Self {
         Self(v)
     }
@@ -323,16 +337,19 @@ impl LedIntensity {
     pub const OFF: Self = Self(0);
     pub const FULL: Self = Self(255);
 
+    #[inline(always)]
     pub const fn new(value: u8) -> Self {
         Self(value)
     }
 
+    #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
     }
 }
 
 impl From<u8> for LedIntensity {
+    #[inline(always)]
     fn from(v: u8) -> Self {
         Self(v)
     }
@@ -353,6 +370,7 @@ impl SongNumber {
         Ok(Self(value))
     }
 
+    #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
     }
@@ -388,6 +406,7 @@ pub struct MotorBits {
 
 impl MotorBits {
     /// Encode to the raw OI byte.
+    #[inline(always)]
     pub const fn to_raw(self) -> u8 {
         (self.side_brush as u8)
             | ((self.vacuum as u8) << 1)
@@ -423,6 +442,7 @@ pub struct ButtonBits {
 
 impl ButtonBits {
     /// Encode to the raw OI byte.
+    #[inline(always)]
     pub const fn to_raw(self) -> u8 {
         (self.clean as u8)
             | ((self.spot as u8) << 1)

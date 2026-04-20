@@ -17,6 +17,7 @@ pub enum OiMode {
 }
 
 impl OiMode {
+    #[inline(always)]
     pub const fn from_raw(v: u8) -> Self {
         match v {
             0 => Self::Off,
@@ -27,6 +28,7 @@ impl OiMode {
         }
     }
 
+    #[inline(always)]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Off => "Off",
@@ -55,6 +57,7 @@ pub enum ChargingState {
 }
 
 impl ChargingState {
+    #[inline(always)]
     pub const fn from_raw(v: u8) -> Self {
         match v {
             0 => Self::NotCharging,
@@ -97,6 +100,7 @@ pub enum DayOfWeek {
 }
 
 impl DayOfWeek {
+    #[inline(always)]
     pub const fn to_raw(self) -> u8 {
         self as u8
     }
@@ -130,7 +134,8 @@ pub enum IrChar {
 }
 
 impl IrChar {
-    pub fn from_raw(v: u8) -> Self {
+    #[inline(always)]
+    pub const fn from_raw(v: u8) -> Self {
         match v {
             0 => Self::None,
             129 => Self::Left,
