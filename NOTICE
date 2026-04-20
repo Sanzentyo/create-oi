@@ -1,14 +1,12 @@
 # Third-Party Notices
 
-This project (`create-oi`) is a **clean-room Rust implementation** of the
-iRobot Create / Roomba Open Interface (OI) protocol. It does not contain
-any source code from the original `libcreate` library.
+This project (`create-oi`) is a **Rust port** of the
+[libcreate](https://github.com/AutonomyLab/libcreate) C++ library by
+Jacob Perron (Autonomy Lab, Simon Fraser University).
 
-However, the protocol knowledge, sensor packet layout, and OI command
-structure were informed by the open [iRobot Create 2 Open Interface
-specification](https://www.irobot.com/about-irobot/stem/create-2) and by
-reference to the [libcreate](https://github.com/AutonomyLab/libcreate)
-project by Jacob Perron (Autonomy Lab, Simon Fraser University).
+The protocol implementation, sensor packet layout, command structure, and
+overall architecture are derived from libcreate. The Rust code was written
+from scratch rather than mechanically translated from C++.
 
 ---
 
@@ -43,6 +41,6 @@ POSSIBILITY OF SUCH DAMAGE.
 ```
 
 **Note**: This Rust project is licensed under **MIT OR Apache-2.0** (dual
-license). The BSD-3-Clause notice above is provided for attribution to the
-reference project whose protocol knowledge informed this implementation.
-No code from libcreate was copied or translated.
+license). The BSD-3-Clause notice above is provided for attribution to
+libcreate, from which this project's design and protocol implementation
+are derived.

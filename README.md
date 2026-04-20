@@ -91,7 +91,6 @@ at your option.
 
 ## Attribution
 
-This project was informed by the [libcreate](https://github.com/AutonomyLab/libcreate)
-C++ library by Jacob Perron (Autonomy Lab, Simon Fraser University), licensed under
-BSD-3-Clause. See [NOTICE](NOTICE) for details. No code was copied; this is a clean-room
-Rust implementation.
+This project is a Rust port of [libcreate](https://github.com/AutonomyLab/libcreate)
+by Jacob Perron (Autonomy Lab, Simon Fraser University), licensed under BSD-3-Clause.
+See [NOTICE](NOTICE) for details.
