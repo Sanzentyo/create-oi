@@ -1,0 +1,23 @@
+[package]
+name = "create-oi-tokio"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tokio async transport for create-oi (iRobot Create/Roomba)"
+keywords = ["irobot", "create", "roomba", "tokio", "async"]
+categories = ["hardware-support", "asynchronous"]
+
+[dependencies]
+create-oi.workspace = true
+tokio.workspace = true
+tokio-serial.workspace = true
+
+[dev-dependencies]
+create-oi = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[[example]]
+name = "basic_tokio"
+path = "examples/basic_tokio.rs"

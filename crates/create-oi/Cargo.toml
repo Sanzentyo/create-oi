@@ -1,0 +1,17 @@
+[package]
+name = "create-oi"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "iRobot Create/Roomba Open Interface — TypeState robot API with transport abstraction"
+keywords = ["irobot", "create", "roomba", "robot", "protocol"]
+categories = ["hardware-support", "embedded"]
+
+[dependencies]
+create-oi-protocol.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

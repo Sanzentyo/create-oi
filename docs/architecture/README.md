@@ -1,82 +1,123 @@
-# libcreate-rs Architecture
+# create-oi Architecture
 
 ## Overview
 
-`libcreate-rs` is a safe, idiomatic Rust wrapper for [AutonomyLab/libcreate](https://github.com/AutonomyLab/libcreate), a C++ library for controlling iRobot Create 1, Create 2, and compatible Roomba robots over serial.
+`create-oi` is a **pure Rust** implementation of the iRobot Create / Roomba
+[Open Interface (OI)](https://www.irobot.com/about-irobot/stem/create-2) protocol.
+It supports Create 1, Create 2, and compatible Roomba robots over serial.
 
-## Crate Structure
+## Design Principles
 
-```
-libcreate-rs/
-├── libcreate-sys/       # Raw FFI bindings (-sys crate)
-│   ├── csrc/
-│   │   ├── wrapper.h    # C header (opaque handle + all functions)
-│   │   ├── wrapper.cpp  # C++ implementation with try/catch
-│   │   └── boost_compat.h  # Boost 1.85+ API compatibility shim
-│   ├── build.rs         # cc-crate build script
-│   └── src/lib.rs       # extern "C" declarations
-├── src/                 # Safe Rust API
-│   ├── lib.rs           # Public API, re-exports
-│   ├── error.rs         # Error and TransitionError types
-│   ├── types.rs         # ADTs: RobotModel, OiMode, ChargingState, newtypes
-│   ├── mode.rs          # TypeState markers: Off, Passive, Safe, Full
-│   ├── sensor.rs        # SensorSnapshot with rich sub-structs
-│   └── robot.rs         # Robot<M: Mode> with typestate transitions
-└── vendor/libcreate/    # Git submodule of upstream C++ library
-```
+- **Sans-IO**: Protocol encoding/decoding is completely independent of I/O.
+  The `create-oi-protocol` crate works on plain `&[u8]` — zero allocation, zero copy.
+- **TypeState**: The OI mode is encoded as a type parameter on `Create<M, T>`.
+  Invalid operations are compile-time errors, not runtime panics.
+- **Layered architecture**: Wire protocol is separate from transport+control.
+- **Multi-crate workspace**: Core protocol and control are independent; transports are separate crates.
+- **Minimal dependencies**: Protocol crate depends only on `thiserror`. No proc macros.
+- **MIT OR Apache-2.0**: Independent implementation of the open OI spec.
 
-## Design Patterns
-
-### TypeState Pattern
-
-The robot's Open Interface (OI) mode is encoded in the type system:
+## Workspace Structure
 
 ```
-Robot<Off> ──connect()──> Robot<Passive> ──into_safe()──> Robot<Safe>
-                              │                              │
-                              └──into_full()──> Robot<Full> <┘
+Cargo.toml                       # Virtual workspace manifest (resolver = "3")
+crates/
+├── create-oi-protocol/          # Sans-IO wire format: opcodes, commands, sensors, stream
+│   └── src/
+│       ├── lib.rs               # Module declarations + prelude
+│       ├── error.rs             # ProtocolError (Checksum, InsufficientData, Protocol)
+│       ├── types.rs             # Wire-level enums: OiMode, ChargingState, IrChar, etc.
+│       ├── opcode.rs            # OI opcodes (#[repr(u8)]) + sensor packet metadata
+│       ├── command.rs           # Command encoding → fixed-size byte arrays
+│       ├── sensor.rs            # Sensor packet parsing from &[u8] → SensorData
+│       └── stream.rs            # StreamParser: byte-wise framing state machine
+├── create-oi/                   # Control layer: TypeState API + transport traits
+│   ├── src/
+│   │   ├── lib.rs               # Public API + prelude + protocol re-exports
+│   │   ├── error.rs             # Error (wraps ProtocolError + Io + domain errors)
+│   │   ├── types.rs             # RobotModel + validated newtypes (Velocity, Radius, etc.)
+│   │   ├── mode.rs              # TypeState markers + sealed capability traits
+│   │   ├── transport.rs         # Transport + AsyncTransport trait definitions
+│   │   ├── create.rs            # Create<M, T: Transport> — sync API
+│   │   └── async_create.rs      # AsyncCreate<M, T: AsyncTransport> — async API
+│   └── tests/
+│       ├── mock_robot.rs        # 14 sync integration tests
+│       └── mock_async_robot.rs  # 13 async integration tests
+├── create-oi-serial/            # SerialTransport (sync)
+├── create-oi-tokio/             # TokioTransport (async, tokio runtime)
+├── create-oi-smol/              # SmolTransport (experimental, publish=false)
+└── create-oi-dora/              # dora-rs dataflow node (publish=false)
 ```
 
-- Mode transitions **consume** `self` and return `Robot<NewMode>`
-- Invalid operations (e.g., `drive()` on `Robot<Passive>`) are compile errors
-- Failed transitions return `TransitionError<OldMode>` preserving the robot
-- Capability traits (`SensorReadable`, `Actuatable`) gate method availability
+## Layer Separation
 
-### Algebraic Data Types (ADTs)
+### `create-oi-protocol` — Wire Format (Sans-IO)
+
+Pure encoding/decoding with no transport dependency:
+- `Opcode` — `#[repr(u8)]` enum, cast via `as u8`
+- `command::encode_*()` — returns `[u8; N]` or `Vec<u8>`
+- `SensorData::decode_packet()` — parses from `&[u8]`
+- `StreamParser::feed(&[u8])` — byte-wise state machine
+- `ProtocolError` — Checksum, InsufficientData, Protocol
+
+### `create-oi` — Control Layer
+
+Transport-aware TypeState API:
+- `Create<M, T>` / `AsyncCreate<M, T>` — mode as type parameter
+- `Transport` / `AsyncTransport` traits
+- `Error` — wraps `ProtocolError` via `#[from]`, adds Io/Connection/etc.
+- Validated newtypes (Velocity, Radius, MotorPower, etc.)
+- `mode.rs` — sealed traits gating method availability
+
+## TypeState Pattern
+
+The robot's OI mode is encoded in the type system. Both `Create<M, T>` (sync)
+and `AsyncCreate<M, T>` (async) share the same TypeState model:
+
+```
+Create<Off, T> ─start()→ Create<Passive, T> ─to_safe()→ Create<Safe, T>
+                               │                            │
+                               └─to_full()→ Create<Full, T> ←┘
+```
+
+- Mode transitions **consume** `self` and return `Create<NewMode, T>`
+- Invalid operations (e.g., `drive()` on `Create<Passive, _>`) are compile errors
+- Failed transitions return `TransitionError { robot, source }` preserving the robot
+- Failed connects return `ConnectError { transport, source }` preserving the transport
+- Sealed capability traits (`SensorReadable`, `Actuatable`) gate method availability
+
+## Algebraic Data Types
 
 All domain values are proper Rust enums/newtypes:
 - `RobotModel`: `Roomba400 | Create1 | Create2`
-- `OiMode`: `Off | Passive | Safe | Full | Unknown(i32)`
-- `ChargingState`: `NotCharging | Reconditioning | ... | Unknown(i32)`
-- Sensor enums include `Unknown` variants for forward-compatibility
+- `OiMode`: `Off | Passive | Safe | Full | Unknown(u8)`
+- `ChargingState`: `NotCharging | Reconditioning | ... | Unknown(u8)`
+- Sensor enums include `Unknown(u8)` for forward-compatibility
 
-### Newtype Pattern
+## Validated Newtypes
 
 Physical quantities use validated newtypes with private inner fields:
 - `Velocity(f32)` — range [-0.5, 0.5] m/s
-- `AngularVelocity(f32)` — range [-4.25, 4.25] rad/s
+- `AngularVelocity(f32)` — range [-π, π] rad/s
+- `Radius(f32)` — range [-2.0, 2.0] m
 - `MotorPower(f32)` — range [-1.0, 1.0]
-- All reject NaN/infinity via `TryFrom<f32>` and `new()`
+- All reject NaN/infinity via `new()` and `TryFrom<f32>`
 
-## FFI Safety Strategy
+## Crates
 
-1. **Opaque C handle**: C++ `create::Create` is wrapped in an opaque struct with `std::mutex`
-2. **Exception boundary**: Every C wrapper function has `try/catch(...)` — no C++ exceptions cross FFI
-3. **Mutex protection**: All handle access is mutex-guarded in the C layer
-4. **Signal handler disabled**: `install_signal_handler = false` in constructor
-5. **!Send + !Sync**: `Robot` cannot be shared or sent across threads
-6. **Null safety**: `Robot::new()` checks for null pointer from `create_robot_new()`
+| Crate | Description | Dependencies |
+|-------|-------------|-------------|
+| `create-oi-protocol` | Sans-IO wire protocol | `thiserror` |
+| `create-oi` | TypeState control API + transport traits | `create-oi-protocol`, `thiserror` |
+| `create-oi-serial` | Sync serial transport | `create-oi`, `serialport 4.9` |
+| `create-oi-tokio` | Tokio async transport | `create-oi`, `tokio 1`, `tokio-serial 5.4` |
+| `create-oi-smol` | Smol async transport (stub) | `create-oi`, `smol 2`, `async-io 2` |
+| `create-oi-dora` | dora-rs dataflow node | `create-oi`, `dora-node-api 0.3` |
 
-## Boost Compatibility
+## Build & Test
 
-The `boost_compat.h` header provides API shims for Boost 1.85+ where:
-- `boost::asio::io_service` → subclass of `io_context` with `reset()` re-added
-- `boost::asio::deadline_timer` → subclass of `steady_timer` with `expires_from_now()`
-- `boost::posix_time::milliseconds()` → `std::chrono::milliseconds`
-
-## Build System
-
-- `build.rs` uses the `cc` crate to compile all C++ sources
-- Boost is auto-detected at Homebrew paths (ARM/Intel)
-- Optional `ZIG_CXX` env var for zig-based C++ compilation
-- `justfile` provides convenient build recipes
+```bash
+just ci       # fmt-check + clippy + build + test
+just check    # fast workspace check
+just doc      # generate docs
+```

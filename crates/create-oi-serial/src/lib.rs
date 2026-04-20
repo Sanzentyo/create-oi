@@ -1,0 +1,71 @@
+//! Serial port transport using the `serialport` crate.
+//!
+//! Provides [`SerialTransport`], a synchronous [`Transport`] implementation
+//! for communicating with iRobot Create / Roomba robots over a serial port.
+
+use std::io;
+use std::time::Duration;
+
+use create_oi::transport::Transport;
+use create_oi::types::RobotModel;
+
+/// Re-export core types for convenience.
+pub use create_oi;
+
+/// Synchronous serial port transport.
+#[derive(Debug)]
+pub struct SerialTransport {
+    port: Box<dyn serialport::SerialPort>,
+}
+
+impl SerialTransport {
+    /// Open a serial port with settings appropriate for the given robot model.
+    pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
+        let port = serialport::new(path, model.baud())
+            .data_bits(serialport::DataBits::Eight)
+            .parity(serialport::Parity::None)
+            .stop_bits(serialport::StopBits::One)
+            .flow_control(serialport::FlowControl::None)
+            .timeout(Duration::from_secs(1))
+            .open()?;
+        Ok(Self { port })
+    }
+
+    /// Open a serial port with a custom baud rate.
+    pub fn open_with_baud(path: &str, baud: u32) -> io::Result<Self> {
+        let port = serialport::new(path, baud)
+            .data_bits(serialport::DataBits::Eight)
+            .parity(serialport::Parity::None)
+            .stop_bits(serialport::StopBits::One)
+            .flow_control(serialport::FlowControl::None)
+            .timeout(Duration::from_secs(1))
+            .open()?;
+        Ok(Self { port })
+    }
+}
+
+impl Transport for SerialTransport {
+    fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
+        io::Write::write_all(&mut self.port, data)
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        io::Read::read(&mut self.port, buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::Write::flush(&mut self.port)
+    }
+
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        self.port
+            .set_timeout(timeout.unwrap_or(Duration::from_secs(u64::MAX)))
+            .map_err(io::Error::other)
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        // serialport doesn't have an explicit close; drop handles it.
+        // We just flush.
+        io::Write::flush(&mut self.port)
+    }
+}

@@ -1,0 +1,32 @@
+# Example dora-rs dataflow definition for iRobot Create driver.
+#
+# This YAML defines a minimal dataflow that:
+#   1. Polls the Create robot's sensors every 50ms
+#   2. Logs sensor data to the console
+#
+# Usage:
+#   dora start dataflow.yml
+#   dora stop
+
+nodes:
+  # Create driver node — reads sensors on tick, outputs Arrow arrays
+  - id: create_driver
+    operator:
+      python: false
+      inputs:
+        tick: dora/timer/millis/50
+      outputs:
+        - sensors
+        - battery
+    # Build with: cargo build --release -p create-oi-dora --example dora_create_driver
+    # Then point `path` to the built binary.
+    # path: ../../target/release/examples/dora_create_driver
+
+  # Simple logger node — prints received sensor data
+  - id: logger
+    operator:
+      python: false
+      inputs:
+        sensor_data: create_driver/sensors
+        battery_data: create_driver/battery
+      outputs: []

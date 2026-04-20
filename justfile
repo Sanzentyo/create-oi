@@ -4,21 +4,25 @@ set shell := ["bash", "-cu"]
 default:
     @just --list
 
-# Build the entire workspace
+# Build default workspace members (core, serial, tokio)
 build:
     cargo build --workspace
+
+# Build ALL crates including experimental (smol, dora)
+build-all:
+    cargo build --workspace --all-targets
 
 # Build in release mode
 release:
     cargo build --workspace --release
 
-# Run all tests
+# Run all tests (default members)
 test: build
     cargo test --workspace
 
-# Run clippy lints
+# Run clippy lints on the entire workspace
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Format code
 fmt:
@@ -31,18 +35,14 @@ fmt-check:
 # Full CI check: format, clippy, build, test
 ci: fmt-check clippy build test
 
-# Build with zig c++ (requires ZIG_CXX wrapper script)
-build-zig:
-    ZIG_CXX="{{justfile_directory()}}/scripts/zig-cxx.sh" cargo build --workspace
-
 # Clean build artifacts
 clean:
     cargo clean
 
-# Generate documentation
+# Generate documentation for all workspace crates
 doc:
     cargo doc --workspace --no-deps --open
 
 # Check the workspace compiles without producing artifacts
 check:
-    cargo check --workspace
+    cargo check --workspace --all-targets

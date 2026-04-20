@@ -1,3 +1,0 @@
-[submodule "vendor/libcreate"]
-	path = vendor/libcreate
-	url = https://github.com/AutonomyLab/libcreate.git
