@@ -8,32 +8,38 @@
 //!
 //! Where `checksum` = low byte such that `(19 + nbytes + all_data_bytes + checksum) & 0xFF == 0`.
 //!
-//! This module provides a [`StreamParser`] that consumes raw bytes via [`feed()`](StreamParser::feed)
-//! and emits parsed frames.
+//! This module provides a [`StreamParser`] that consumes raw bytes via
+//! [`feed_with()`](StreamParser::feed_with) (no-alloc callback) or
+//! [`feed()`](StreamParser::feed) (alloc, returns `Vec`).
+
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 use crate::error::ProtocolError;
-use crate::sensor::SensorData;
-
 use crate::opcode::packet_info;
+use crate::sensor::SensorData;
 
 /// Header byte that starts every stream frame.
 const STREAM_HEADER: u8 = 19;
 
-/// Maximum plausible frame size to guard against corrupt data.
-const MAX_FRAME_LEN: usize = 256;
+/// Default buffer capacity — sufficient for any valid OI stream frame.
+const DEFAULT_BUF_CAP: usize = 256;
 
 /// State machine for parsing OI stream frames from a byte stream.
 ///
 /// This is a sans-IO component: it does not read from any I/O source.
 /// Feed it bytes, and it produces parsed [`SensorData`] frames.
+///
+/// The const generic `N` controls the internal buffer capacity.
+/// Default is 256, which is sufficient for any valid OI stream frame.
 #[derive(Debug)]
-pub struct StreamParser {
-    /// Internal byte buffer.
-    buf: Vec<u8>,
+pub struct StreamParser<const N: usize = DEFAULT_BUF_CAP> {
+    /// Internal fixed-size byte buffer.
+    buf: [u8; N],
+    /// Current number of valid bytes in the buffer.
+    len: usize,
     /// Current parser state.
     state: State,
-    /// Expected packet IDs in the stream (set by the user via `set_packet_ids`).
-    packet_ids: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,92 +53,94 @@ enum State {
     Collecting { expected: usize },
 }
 
-impl StreamParser {
-    /// Create a new parser. Call [`set_packet_ids`](Self::set_packet_ids) before feeding data.
+impl<const N: usize> StreamParser<N> {
+    /// Create a new parser with the given buffer capacity.
     pub fn new() -> Self {
         Self {
-            buf: Vec::with_capacity(128),
+            buf: [0u8; N],
+            len: 0,
             state: State::WaitingHeader,
-            packet_ids: Vec::new(),
         }
-    }
-
-    /// Create a new parser.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            buf: Vec::with_capacity(capacity),
-            state: State::WaitingHeader,
-            packet_ids: Vec::new(),
-        }
-    }
-
-    /// Set the packet IDs that this stream is expected to contain.
-    /// This must match the IDs passed to the `encode_stream()` command.
-    pub fn set_packet_ids(&mut self, ids: &[u8]) {
-        self.packet_ids = ids.to_vec();
     }
 
     /// Reset the parser state, discarding any partial frame.
     pub fn reset(&mut self) {
-        self.buf.clear();
+        self.len = 0;
         self.state = State::WaitingHeader;
     }
 
-    /// Feed raw bytes from the transport into the parser.
+    /// Feed raw bytes and invoke `on_frame` for each complete frame parsed.
     ///
-    /// Returns a `Vec` of successfully parsed sensor frames.
-    /// In normal operation 0 or 1 frames are returned per call.
-    pub fn feed(&mut self, data: &[u8]) -> Vec<Result<SensorData, ProtocolError>> {
-        let mut frames = Vec::new();
+    /// This is the primary no-alloc API. Each successfully parsed frame is
+    /// delivered to the callback as it is decoded.
+    pub fn feed_with<F>(&mut self, data: &[u8], mut on_frame: F)
+    where
+        F: FnMut(Result<SensorData, ProtocolError>),
+    {
         for &byte in data {
             match self.state {
                 State::WaitingHeader => {
                     if byte == STREAM_HEADER {
-                        self.buf.clear();
-                        self.buf.push(byte);
+                        self.len = 0;
+                        self.push_byte(byte);
                         self.state = State::WaitingLength;
                     }
-                    // else: discard byte, keep looking
                 }
                 State::WaitingLength => {
-                    self.buf.push(byte);
+                    self.push_byte(byte);
                     let nbytes = byte as usize;
-                    if nbytes == 0 || nbytes > MAX_FRAME_LEN {
-                        // Invalid length; go back to scanning.
+                    if nbytes == 0 || nbytes > N.saturating_sub(2) {
                         self.state = State::WaitingHeader;
                     } else {
-                        // We need nbytes more data bytes + 1 checksum.
                         self.state = State::Collecting {
                             expected: nbytes + 1,
                         };
                     }
                 }
                 State::Collecting { expected } => {
-                    self.buf.push(byte);
-                    if self.buf.len() - 2 >= expected {
-                        // Full frame collected. Validate checksum.
-                        frames.push(self.parse_frame());
+                    self.push_byte(byte);
+                    if self.len - 2 >= expected {
+                        on_frame(self.parse_frame());
                         self.state = State::WaitingHeader;
                     }
                 }
             }
         }
+    }
+
+    /// Feed raw bytes from the transport into the parser.
+    ///
+    /// Returns a `Vec` of successfully parsed sensor frames.
+    /// In normal operation 0 or 1 frames are returned per call.
+    #[cfg(feature = "alloc")]
+    pub fn feed(&mut self, data: &[u8]) -> Vec<Result<SensorData, ProtocolError>> {
+        let mut frames = Vec::new();
+        self.feed_with(data, |result| frames.push(result));
         frames
     }
 
-    /// Parse the complete frame in `self.buf`.
-    fn parse_frame(&mut self) -> Result<SensorData, ProtocolError> {
+    fn push_byte(&mut self, byte: u8) {
+        if self.len < N {
+            self.buf[self.len] = byte;
+            self.len += 1;
+        }
+    }
+
+    /// Parse the complete frame in `self.buf[..self.len]`.
+    fn parse_frame(&self) -> Result<SensorData, ProtocolError> {
+        let frame = &self.buf[..self.len];
+
         // Verify checksum: sum of all bytes (including header) mod 256 == 0
-        let checksum: u8 = self.buf.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        let checksum: u8 = frame.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
         if checksum != 0 {
-            let expected = self.buf.last().copied().unwrap_or(0);
+            let expected = frame[self.len - 1];
             let actual = expected.wrapping_sub(checksum).wrapping_add(expected);
             return Err(ProtocolError::Checksum { expected, actual });
         }
 
         // Parse the payload: [id1][data1...][id2][data2...] ...
         // Payload starts at index 2 (after header + nbytes), ends before last byte (checksum).
-        let payload = &self.buf[2..self.buf.len() - 1];
+        let payload = &frame[2..self.len - 1];
         let mut sd = SensorData::default();
         let mut offset = 0;
 
@@ -143,9 +151,7 @@ impl StreamParser {
             let info = match packet_info(pkt_id) {
                 Some(i) => i,
                 None => {
-                    return Err(ProtocolError::Protocol(format!(
-                        "unknown packet id {pkt_id} in stream"
-                    )));
+                    return Err(ProtocolError::UnknownPacketId(pkt_id));
                 }
             };
             let len = info.len as usize;
@@ -163,7 +169,7 @@ impl StreamParser {
     }
 }
 
-impl Default for StreamParser {
+impl<const N: usize> Default for StreamParser<N> {
     fn default() -> Self {
         Self::new()
     }
@@ -176,13 +182,14 @@ impl Default for StreamParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     /// Build a stream frame: [19][nbytes][payload...][checksum]
     fn make_frame(payload: &[u8]) -> Vec<u8> {
         let nbytes = payload.len() as u8;
         let mut frame = vec![STREAM_HEADER, nbytes];
         frame.extend_from_slice(payload);
-        // Checksum: sum all bytes so far, then append byte that makes total % 256 == 0
         let sum: u8 = frame.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
         frame.push(0u8.wrapping_sub(sum));
         frame
@@ -190,9 +197,8 @@ mod tests {
 
     #[test]
     fn parse_single_frame_wall() {
-        let mut parser = StreamParser::new();
-        // Stream with packet 8 (wall), value=1
-        let payload = [8, 1]; // id=8, data=1
+        let mut parser = StreamParser::<256>::new();
+        let payload = [8, 1];
         let frame = make_frame(&payload);
 
         let results = parser.feed(&frame);
@@ -203,8 +209,7 @@ mod tests {
 
     #[test]
     fn parse_single_frame_voltage() {
-        let mut parser = StreamParser::new();
-        // Stream with packet 22 (voltage, 2 bytes), value=12500 (0x30D4)
+        let mut parser = StreamParser::<256>::new();
         let payload = [22, 0x30, 0xD4];
         let frame = make_frame(&payload);
 
@@ -216,8 +221,7 @@ mod tests {
 
     #[test]
     fn parse_two_packets_in_one_frame() {
-        let mut parser = StreamParser::new();
-        // wall (id=8, 1 byte) + voltage (id=22, 2 bytes)
+        let mut parser = StreamParser::<256>::new();
         let payload = [8, 1, 22, 0x30, 0xD4];
         let frame = make_frame(&payload);
 
@@ -230,11 +234,10 @@ mod tests {
 
     #[test]
     fn parse_split_across_feeds() {
-        let mut parser = StreamParser::new();
+        let mut parser = StreamParser::<256>::new();
         let payload = [8, 1];
         let frame = make_frame(&payload);
 
-        // Feed byte by byte
         for &byte in &frame[..frame.len() - 1] {
             let results = parser.feed(&[byte]);
             assert!(results.is_empty(), "no frame should be emitted yet");
@@ -246,10 +249,9 @@ mod tests {
 
     #[test]
     fn bad_checksum_returns_error() {
-        let mut parser = StreamParser::new();
+        let mut parser = StreamParser::<256>::new();
         let payload = [8, 1];
         let mut frame = make_frame(&payload);
-        // Corrupt the checksum
         *frame.last_mut().unwrap() = frame.last().unwrap().wrapping_add(1);
 
         let results = parser.feed(&frame);
@@ -259,11 +261,10 @@ mod tests {
 
     #[test]
     fn garbage_before_header_is_skipped() {
-        let mut parser = StreamParser::new();
-        let payload = [8, 0]; // wall = false
+        let mut parser = StreamParser::<256>::new();
+        let payload = [8, 0];
         let frame = make_frame(&payload);
 
-        // Prepend garbage
         let mut data = vec![0xFF, 0xAA, 0x00, 0x55];
         data.extend_from_slice(&frame);
 
@@ -275,9 +276,9 @@ mod tests {
 
     #[test]
     fn two_frames_in_one_feed() {
-        let mut parser = StreamParser::new();
+        let mut parser = StreamParser::<256>::new();
         let f1 = make_frame(&[8, 1]);
-        let f2 = make_frame(&[35, 2]); // OI mode = Safe
+        let f2 = make_frame(&[35, 2]);
 
         let mut data = f1;
         data.extend_from_slice(&f2);
@@ -293,14 +294,25 @@ mod tests {
 
     #[test]
     fn reset_discards_partial() {
-        let mut parser = StreamParser::new();
+        let mut parser = StreamParser::<256>::new();
         let frame = make_frame(&[8, 1]);
-        // Feed partial
         parser.feed(&frame[..2]);
         parser.reset();
-        // Feed the same frame fully — should parse ok
         let results = parser.feed(&frame);
         assert_eq!(results.len(), 1);
         assert!(results[0].is_ok());
+    }
+
+    #[test]
+    fn feed_with_callback() {
+        let mut parser = StreamParser::<256>::new();
+        let frame = make_frame(&[8, 1]);
+        let mut count = 0;
+        parser.feed_with(&frame, |result| {
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().wall, Some(true));
+            count += 1;
+        });
+        assert_eq!(count, 1);
     }
 }

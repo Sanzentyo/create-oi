@@ -10,7 +10,13 @@
 //! - **Stream framing** — byte-wise state machine for sensor stream parsing
 //!
 //! It has **zero I/O dependencies** — all functions operate on plain byte slices.
-//! Suitable for embedded, no-std (with alloc), or any environment.
+//! Suitable for embedded, `no_std`, or any environment.
+//!
+//! ## Features
+//!
+//! - `std` (default) — enables `std::error::Error` impls and `alloc`
+//! - `alloc` — enables `Vec`-returning convenience APIs
+//! - Neither — fully `no_std`, no heap: only buffer-based APIs
 //!
 //! ## Usage
 //!
@@ -22,6 +28,11 @@
 //! let bytes = command::encode_start();
 //! assert_eq!(bytes, [Opcode::Start as u8]);
 //! ```
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 pub mod command;
 pub mod error;

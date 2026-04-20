@@ -571,10 +571,7 @@ dependencies = [
 
 [[package]]
 name = "create-oi-protocol"
-version = "0.3.0"
-dependencies = [
- "thiserror 2.0.18",
-]
+version = "0.4.0"
 
 [[package]]
 name = "create-oi-serial"

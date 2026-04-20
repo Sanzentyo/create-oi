@@ -44,6 +44,10 @@
 //! // robot.drive(Velocity::new(0.1)?, Radius::STRAIGHT).await?;
 //! ```
 
+// TransitionError/ConnectError intentionally store the robot/transport handle
+// for recovery, making them large. This is by design.
+#![allow(clippy::result_large_err)]
+
 pub mod async_create;
 pub mod create;
 pub mod error;

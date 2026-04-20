@@ -131,8 +131,7 @@ impl SensorData {
     ///
     /// Returns the number of bytes consumed.
     pub fn decode_packet(&mut self, id: u8, data: &[u8]) -> Result<usize, ProtocolError> {
-        let info = packet_info(id)
-            .ok_or_else(|| ProtocolError::Protocol(format!("unknown packet id {id}")))?;
+        let info = packet_info(id).ok_or(ProtocolError::UnknownPacketId(id))?;
         let len = info.len as usize;
         if data.len() < len {
             return Err(ProtocolError::InsufficientData {
@@ -210,7 +209,7 @@ impl SensorData {
             56 => self.main_brush_motor_current = Some(decode_i16(data)?),
             57 => self.side_brush_motor_current = Some(decode_i16(data)?),
             58 => self.stasis = Some(decode_u8(data)? != 0),
-            _ => return Err(ProtocolError::Protocol(format!("unknown packet id {id}"))),
+            _ => return Err(ProtocolError::UnknownPacketId(id)),
         }
         Ok(())
     }
@@ -222,7 +221,7 @@ pub fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
         .map(|&id| {
             packet_info(id)
                 .map(|p| p.len as usize)
-                .ok_or_else(|| ProtocolError::Protocol(format!("unknown packet id {id}")))
+                .ok_or(ProtocolError::UnknownPacketId(id))
         })
         .sum()
 }

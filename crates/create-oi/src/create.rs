@@ -148,11 +148,9 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
         self.send_cmd(&command::encode_sensors(packet_id))?;
 
-        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(format!(
-                "unknown packet id {packet_id}"
-            )))
-        })?;
+        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+        ))?;
         let mut buf = vec![0u8; info.len as usize];
         self.read_exact(&mut buf)?;
         Ok(buf)
@@ -182,16 +180,13 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Read the robot's current OI mode from sensor data.
     pub fn read_oi_mode(&mut self) -> Result<OiMode, Error> {
         let sd = self.query_sensor(35)?;
-        sd.oi_mode.ok_or_else(|| {
-            Error::Protocol(create_oi_protocol::error::ProtocolError::Protocol(
-                "missing OI mode".into(),
-            ))
-        })
+        sd.oi_mode.ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::MissingSensorField { field: "oi_mode" },
+        ))
     }
 
     /// Start streaming the given packet IDs.
     pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error> {
-        self.stream_parser.set_packet_ids(packet_ids);
         self.send_cmd(&command::encode_stream(packet_ids))
     }
 
