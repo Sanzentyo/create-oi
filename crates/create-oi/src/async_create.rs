@@ -14,10 +14,11 @@
 //! the robot handle after cancellation.
 
 use crate::error::{ConnectError, Error, TransitionError};
-use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
+use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::AsyncTransport;
 use crate::types::{
-    CreateRobotModel, LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
+    AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
+    MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
 };
 use core::marker::PhantomData;
 use create_oi_protocol::command;
@@ -282,6 +283,71 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         }
         Ok(())
     }
+
+    /// Initiate a cleaning cycle. Transitions the robot to Passive mode.
+    ///
+    /// The OI spec defines three cleaning modes:
+    /// - [`CleanMode::Default`] — standard cleaning pattern
+    /// - [`CleanMode::Spot`] — spot cleaning (small area)
+    /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
+    pub async fn clean(
+        mut self,
+        mode: CleanMode,
+    ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
+        let cmd = match mode {
+            CleanMode::Default => command::encode_clean(),
+            CleanMode::Spot => command::encode_spot(),
+            CleanMode::Max => command::encode_max(),
+        };
+        if let Err(e) = self.send_cmd(&cmd).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Seek the dock. Transitions the robot to Passive mode.
+    pub async fn seek_dock(
+        mut self,
+    ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_dock()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Power off the robot and return the underlying transport.
+    ///
+    /// After this call the robot is powered down. To reconnect, wrap the
+    /// returned transport in a new `AsyncCreate::<Off, _>::new(transport, model)`.
+    pub async fn power_off(mut self) -> Result<T, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_power()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transport)
+    }
+
+    /// Reset the robot and return the underlying transport.
+    ///
+    /// After this call the robot reboots. The serial connection may need to be
+    /// re-opened before creating a new `AsyncCreate::<Off, _>::new(transport, model)`.
+    pub async fn reset(mut self) -> Result<T, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_reset()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transport)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +449,80 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     ) -> Result<(), Error<T::Error>> {
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
             .await
+    }
+
+    /// Enable or disable motors with direction control.
+    pub async fn set_motors(&mut self, motors: MotorBits) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_motors(motors.to_raw()))
+            .await
+    }
+
+    /// Set raw 7-segment digit LEDs.
+    ///
+    /// Each byte controls one digit: bits 0–6 = segments A–G, bit 7 = decimal point.
+    /// `d3` is the leftmost digit and `d0` is the rightmost.
+    pub async fn set_digit_leds_raw(
+        &mut self,
+        d3: u8,
+        d2: u8,
+        d1: u8,
+        d0: u8,
+    ) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_digit_leds_raw(d3, d2, d1, d0))
+            .await
+    }
+
+    /// Drive using the unicycle (twist) model: linear velocity and angular velocity.
+    ///
+    /// Computes individual wheel speeds via differential drive kinematics:
+    /// `right = v + ω × (axle/2)`, `left = v − ω × (axle/2)`.
+    /// Wheel speeds are clamped to ±500 mm/s as required by the OI spec.
+    pub async fn drive_twist(
+        &mut self,
+        velocity: Velocity,
+        omega: AngularVelocity,
+    ) -> Result<(), Error<T::Error>> {
+        let half_axle_mm = self.model.axle_length() * 500.0;
+        let v_mm = velocity.to_mm_per_sec() as f32;
+        let right_mm = (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500);
+        let left_mm = (libm::roundf(v_mm - omega.get() * half_axle_mm) as i16).clamp(-500, 500);
+        self.send_cmd(&command::encode_drive_direct(right_mm, left_mm))
+            .await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full-control commands (Full only)
+// ---------------------------------------------------------------------------
+
+impl<M: FullControl, T: AsyncTransport> AsyncCreate<M, T> {
+    /// Simulate button presses on the robot (Full mode only).
+    pub async fn simulate_buttons(&mut self, buttons: ButtonBits) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_buttons(buttons.to_raw()))
+            .await
+    }
+
+    /// Set the robot's internal date and time (Full mode only).
+    pub async fn set_date(
+        &mut self,
+        day: DayOfWeek,
+        hour: u8,
+        minute: u8,
+    ) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_date(day.to_raw(), hour, minute))
+            .await
+    }
+
+    /// Set the weekly cleaning schedule (Full mode only).
+    ///
+    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday).
+    /// `times`: (hour, minute) for each day, starting with Sunday.
+    pub async fn set_schedule(
+        &mut self,
+        days: u8,
+        times: [(u8, u8); 7],
+    ) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_schedule(days, times)).await
     }
 }
 

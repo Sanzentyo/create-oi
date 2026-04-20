@@ -1,49 +1,74 @@
 //! Smol async transport for the robot.
 //!
-//! Uses `async-io` to wrap the synchronous `serialport` handle for
-//! non-blocking operation on the smol runtime.
+//! Uses [`smol::Unblock`] to wrap the native `serialport::TTYPort` for
+//! non-blocking async I/O on the smol runtime. Blocking I/O is dispatched
+//! to a thread pool, keeping the executor free.
 //!
-//! **Status: experimental / stub** — `open()` currently returns
-//! `Unsupported` because wrapping the serialport fd requires
-//! platform-specific `AsRawFd` extraction.
+//! # Platform Support
+//!
+//! `serialport::TTYPort` is Unix-only. On non-Unix platforms this module
+//! is empty and `SmolTransport` is not available.
+
+#![cfg(unix)]
 
 use std::io;
+use std::time::Duration;
 
+use create_oi::transport::AsyncTransport;
 use create_oi::types::CreateRobotModel;
+use smol::Unblock;
+use smol::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Re-export core types for convenience.
 pub use create_oi;
 
 /// Async transport for the smol runtime.
 ///
-/// This wraps a `serialport` file descriptor with `async-io::Async`
-/// for non-blocking I/O on the smol executor.
+/// Wraps a native `serialport::TTYPort` in [`smol::Unblock`], which runs
+/// blocking serial I/O on a thread pool without blocking the async executor.
 #[derive(Debug)]
 pub struct SmolTransport {
-    #[expect(
-        dead_code,
-        reason = "stub: will be used once fd extraction is implemented"
-    )]
-    port: async_io::Async<create_oi_serial::SerialTransport>,
+    port: Unblock<serialport::TTYPort>,
 }
 
 impl SmolTransport {
-    /// Open a serial port for the given model.
+    /// Open a serial port for the given robot model.
     ///
-    /// # Note
-    /// This currently requires `unsafe` to extract the raw fd from the serial port.
-    /// We gate behind a feature flag and document this caveat.
+    /// Uses the native baud rate for the model:
+    /// - Create 2: 115200
+    /// - Create 1: 57600
     pub fn open(path: &str, model: CreateRobotModel) -> io::Result<Self> {
-        let _inner = create_oi_serial::SerialTransport::open(path, model)?;
-        // async-io::Async requires the inner type to implement AsRawFd (Unix)
-        // or AsRawSocket (Windows). Since SerialTransport wraps Box<dyn SerialPort>,
-        // we cannot directly satisfy this. This is a known limitation.
-        //
-        // For now, we provide a stub. A production implementation would need to
-        // either extract the fd from serialport or use a different approach.
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "SmolTransport requires OS-specific fd extraction; not yet implemented",
-        ))
+        Self::open_with_baud(path, model.baud())
+    }
+
+    /// Open a serial port with a custom baud rate.
+    pub fn open_with_baud(path: &str, baud: u32) -> io::Result<Self> {
+        let port = serialport::new(path, baud)
+            .timeout(Duration::from_millis(100))
+            .open_native()
+            .map_err(io::Error::other)?;
+        Ok(Self {
+            port: Unblock::new(port),
+        })
+    }
+}
+
+impl AsyncTransport for SmolTransport {
+    type Error = io::Error;
+
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        self.port.write_all(data).await
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.port.read(buf).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.port.flush().await
+    }
+
+    async fn delay(&self, duration: Duration) {
+        smol::Timer::after(duration).await;
     }
 }

@@ -18,10 +18,10 @@
 - [x] create-oi-serial: serialport sync transport
 - [x] create-oi-tokio: tokio-serial async transport
 - [x] **create-oi-embassy**: Embassy async transport adapter (embedded-io-async + embassy-time)
-- [x] create-oi-smol: stub (requires unsafe fd extraction)
+- [x] **create-oi-smol**: Real implementation via `smol::Unblock<TTYPort>` (Unix-only)
 - [x] create-oi-dora: dora-rs dataflow integration crate + example
 - [x] Mock transport tests: 14 sync + 13 async integration tests
-- [x] Unit tests: 56 tests across protocol + types
+- [x] Unit tests: 94 tests across all crates
 - [x] Examples: basic_sync, basic_tokio, dora_create_driver
 - [x] Justfile: workspace commands
 - [x] Architecture docs: updated for no_std layered structure
@@ -35,6 +35,14 @@
 - [x] **Embedded verified**: Builds for thumbv7em-none-eabihf (Cortex-M4F)
 - [x] **File renames**: robot.rs → create.rs, async_robot.rs → async_create.rs
 - [x] **resolver = "3"**: workspace Cargo.toml
+- [x] **Gap-fill phase**: All missing OI commands, sensor accessors, and control methods added
+  - New protocol encoders: SchedulingLeds (162), DigitLedsRaw (163), Buttons (165), Schedule (167)
+  - SensorData accessors: bump/wheeldrop, buttons, overcurrents, light bumper, charging, stasis
+  - `FullControl` trait sealed to Full mode; new `MotorBits`, `ButtonBits` typed structs
+  - Error source chain: `std::error::Error::source()` properly wired on all error types
+  - New control methods: `clean`, `seek_dock`, `power_off`, `reset`, `poll_stream_with`
+  - `Actuatable` methods: `set_motors`, `set_digit_leds_raw`, `drive_twist` (unicycle model)
+  - `FullControl` methods: `simulate_buttons`, `set_date`, `set_schedule`
 
 ### no_std Feature Hierarchy
 - `std` (default) → implies `alloc` + `create-oi-protocol/std`
@@ -42,15 +50,15 @@
 - bare → pure no_std async API only (Embassy compatible)
 
 ### Test Summary
-- 37 unit tests (protocol)
-- 19 unit tests (types + control)
+- 42 unit tests (protocol)
+- 25 unit tests (types + control)
 - 14 sync mock robot integration tests
 - 13 async mock robot integration tests
 - 1 protocol doc test
 - `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅
+- `just check-nostd` passes: no_std + Embassy thumbv7em-none-eabihf ✅
 
 ### Remaining
-- [ ] SmolTransport: full implementation (needs safe fd extraction)
 - [ ] Hardware integration tests (requires physical robot)
 - [ ] Publish to crates.io
 - [ ] Version bump coordination (0.4.0)

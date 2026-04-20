@@ -12,7 +12,5 @@ publish = false  # stub — not ready for crates.io
 
 [dependencies]
 create-oi = { workspace = true, features = ["std"] }
-create-oi-serial = { path = "../create-oi-serial" }
 smol.workspace = true
-async-io.workspace = true
 serialport.workspace = true

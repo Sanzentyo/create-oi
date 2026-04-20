@@ -122,7 +122,7 @@ pub struct SensorData {
     pub right_motor_current: Option<i16>,
     pub main_brush_motor_current: Option<i16>,
     pub side_brush_motor_current: Option<i16>,
-    pub stasis: Option<bool>,
+    pub stasis: Option<u8>,
 }
 
 impl SensorData {
@@ -153,6 +153,160 @@ impl SensorData {
             offset += consumed;
         }
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Bumps and wheeldrops (packet 7)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the right bump sensor is active.
+    pub fn is_right_bump(&self) -> Option<bool> {
+        self.bumps_and_wheeldrops.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if the left bump sensor is active.
+    pub fn is_left_bump(&self) -> Option<bool> {
+        self.bumps_and_wheeldrops.map(|b| b & 0x02 != 0)
+    }
+
+    /// Returns `true` if the right wheel has dropped.
+    pub fn is_right_wheeldrop(&self) -> Option<bool> {
+        self.bumps_and_wheeldrops.map(|b| b & 0x04 != 0)
+    }
+
+    /// Returns `true` if the left wheel has dropped.
+    pub fn is_left_wheeldrop(&self) -> Option<bool> {
+        self.bumps_and_wheeldrops.map(|b| b & 0x08 != 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Buttons (packet 18)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the Clean button is pressed.
+    pub fn is_button_clean(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if the Spot button is pressed.
+    pub fn is_button_spot(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x02 != 0)
+    }
+
+    /// Returns `true` if the Dock button is pressed.
+    pub fn is_button_dock(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x04 != 0)
+    }
+
+    /// Returns `true` if the Minute button is pressed.
+    pub fn is_button_minute(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x08 != 0)
+    }
+
+    /// Returns `true` if the Hour button is pressed.
+    pub fn is_button_hour(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x10 != 0)
+    }
+
+    /// Returns `true` if the Day button is pressed.
+    pub fn is_button_day(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x20 != 0)
+    }
+
+    /// Returns `true` if the Schedule button is pressed.
+    pub fn is_button_schedule(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x40 != 0)
+    }
+
+    /// Returns `true` if the Clock button is pressed.
+    pub fn is_button_clock(&self) -> Option<bool> {
+        self.buttons.map(|b| b & 0x80 != 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Overcurrents (packet 14)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the side brush motor is drawing excessive current.
+    pub fn is_overcurrent_side_brush(&self) -> Option<bool> {
+        self.overcurrents.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if the main brush motor is drawing excessive current.
+    pub fn is_overcurrent_main_brush(&self) -> Option<bool> {
+        self.overcurrents.map(|b| b & 0x04 != 0)
+    }
+
+    /// Returns `true` if the right wheel motor is drawing excessive current.
+    pub fn is_overcurrent_right_wheel(&self) -> Option<bool> {
+        self.overcurrents.map(|b| b & 0x08 != 0)
+    }
+
+    /// Returns `true` if the left wheel motor is drawing excessive current.
+    pub fn is_overcurrent_left_wheel(&self) -> Option<bool> {
+        self.overcurrents.map(|b| b & 0x10 != 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Light bumper (packet 45)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the left light bumper is detecting an obstacle.
+    pub fn is_light_bump_left(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if the front-left light bumper is detecting an obstacle.
+    pub fn is_light_bump_front_left(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x02 != 0)
+    }
+
+    /// Returns `true` if the center-left light bumper is detecting an obstacle.
+    pub fn is_light_bump_center_left(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x04 != 0)
+    }
+
+    /// Returns `true` if the center-right light bumper is detecting an obstacle.
+    pub fn is_light_bump_center_right(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x08 != 0)
+    }
+
+    /// Returns `true` if the front-right light bumper is detecting an obstacle.
+    pub fn is_light_bump_front_right(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x10 != 0)
+    }
+
+    /// Returns `true` if the right light bumper is detecting an obstacle.
+    pub fn is_light_bump_right(&self) -> Option<bool> {
+        self.light_bumper.map(|b| b & 0x20 != 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Charging sources (packet 34)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if charging via the home base dock.
+    pub fn is_charging_home_base(&self) -> Option<bool> {
+        self.charging_sources.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if charging via the internal charger.
+    pub fn is_charging_internal(&self) -> Option<bool> {
+        self.charging_sources.map(|b| b & 0x02 != 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Stasis (packet 58)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if the stasis signal is toggling (robot is moving forward).
+    pub fn is_stasis_toggling(&self) -> Option<bool> {
+        self.stasis.map(|b| b & 0x01 != 0)
+    }
+
+    /// Returns `true` if stasis is disabled (Create 1 backward-compatibility mode).
+    pub fn is_stasis_disabled(&self) -> Option<bool> {
+        self.stasis.map(|b| b & 0x02 != 0)
     }
 
     fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), ProtocolError> {
@@ -208,7 +362,7 @@ impl SensorData {
             55 => self.right_motor_current = Some(decode_i16(data)?),
             56 => self.main_brush_motor_current = Some(decode_i16(data)?),
             57 => self.side_brush_motor_current = Some(decode_i16(data)?),
-            58 => self.stasis = Some(decode_u8(data)? != 0),
+            58 => self.stasis = Some(decode_u8(data)?),
             _ => return Err(ProtocolError::UnknownPacketId(id)),
         }
         Ok(())

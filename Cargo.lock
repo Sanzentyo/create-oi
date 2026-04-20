@@ -594,9 +594,7 @@ dependencies = [
 name = "create-oi-smol"
 version = "0.3.0"
 dependencies = [
- "async-io",
  "create-oi",
- "create-oi-serial",
  "serialport",
  "smol",
 ]

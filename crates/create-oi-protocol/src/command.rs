@@ -121,6 +121,48 @@ pub fn encode_digit_leds_ascii(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
     [Opcode::DigitLedsAscii as u8, d3, d2, d1, d0]
 }
 
+/// Set the scheduling LEDs (opcode 162).
+///
+/// `day_leds`: bits 0–6 select the Sun–Sat day LEDs.
+/// `schedule_leds`: bit 0=colon, bit 1=AM/PM indicator, bit 2=clock icon, bit 3=schedule icon.
+pub fn encode_scheduling_leds(day_leds: u8, schedule_leds: u8) -> [u8; 3] {
+    [Opcode::SchedulingLeds as u8, day_leds, schedule_leds]
+}
+
+/// Set raw 7-segment digit LEDs (opcode 163).
+///
+/// Each argument directly controls the 7 segments and decimal point of one digit:
+/// bits 0–6 = segments A–G, bit 7 = decimal point.
+/// `d3` is the leftmost digit and `d0` is the rightmost.
+pub fn encode_digit_leds_raw(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
+    [Opcode::DigitLedsRaw as u8, d3, d2, d1, d0]
+}
+
+/// Simulate button presses (opcode 165; Full mode only).
+///
+/// Bits: 0=clean, 1=spot, 2=dock, 3=minute, 4=hour, 5=day, 6=schedule, 7=clock.
+/// Setting a bit to 1 simulates pressing that button.
+pub fn encode_buttons(bits: u8) -> [u8; 2] {
+    [Opcode::Buttons as u8, bits]
+}
+
+/// Set the weekly cleaning schedule (opcode 167).
+///
+/// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday).
+/// `times`: (hour, minute) for each day of the week, starting with Sunday.
+///
+/// Note: firmware support for this command varies across robot models.
+pub fn encode_schedule(days: u8, times: [(u8, u8); 7]) -> [u8; 16] {
+    let mut buf = [0u8; 16];
+    buf[0] = Opcode::Schedule as u8;
+    buf[1] = days;
+    for (i, (hour, minute)) in times.iter().enumerate() {
+        buf[2 + i * 2] = *hour;
+        buf[2 + i * 2 + 1] = *minute;
+    }
+    buf
+}
+
 /// Define a song. Writes into `buf` and returns the number of bytes written.
 ///
 /// `song_number`: 0-3
@@ -340,5 +382,60 @@ mod tests {
     fn digit_leds_ascii() {
         let cmd = encode_digit_leds_ascii(b'R', b'U', b'S', b'T');
         assert_eq!(cmd, [164, b'R', b'U', b'S', b'T']);
+    }
+
+    #[test]
+    fn scheduling_leds() {
+        // day_leds = 0b0100010 (Mon + Thu), schedule_leds = 0b0011 (colon + AM/PM)
+        let cmd = encode_scheduling_leds(0b0100010, 0b0011);
+        assert_eq!(cmd, [162, 0b0100010, 0b0011]);
+    }
+
+    #[test]
+    fn digit_leds_raw() {
+        let cmd = encode_digit_leds_raw(0x7F, 0x00, 0x41, 0x63);
+        assert_eq!(cmd, [163, 0x7F, 0x00, 0x41, 0x63]);
+    }
+
+    #[test]
+    fn buttons_encode() {
+        // clean + dock = bits 0 and 2
+        let cmd = encode_buttons(0b0000_0101);
+        assert_eq!(cmd, [165, 0b0000_0101]);
+    }
+
+    #[test]
+    fn schedule_encodes_all_days() {
+        // All days enabled, all set to 08:00
+        let times = [(8u8, 0u8); 7];
+        let cmd = encode_schedule(0b0111_1111, times);
+        assert_eq!(cmd[0], 167); // opcode
+        assert_eq!(cmd[1], 0b0111_1111); // days
+        // Sun = byte 2,3; Sat = byte 14,15
+        assert_eq!(cmd[2], 8);
+        assert_eq!(cmd[3], 0);
+        assert_eq!(cmd[14], 8);
+        assert_eq!(cmd[15], 0);
+        assert_eq!(cmd.len(), 16);
+    }
+
+    #[test]
+    fn schedule_per_day_times() {
+        let times = [
+            (9, 0),  // Sun
+            (7, 30), // Mon
+            (7, 30), // Tue
+            (7, 30), // Wed
+            (7, 30), // Thu
+            (8, 0),  // Fri
+            (10, 0), // Sat
+        ];
+        let cmd = encode_schedule(0b0111_1110, times); // Mon–Sat
+        assert_eq!(cmd[2], 9); // Sun hour
+        assert_eq!(cmd[3], 0); // Sun min
+        assert_eq!(cmd[4], 7); // Mon hour
+        assert_eq!(cmd[5], 30); // Mon min
+        assert_eq!(cmd[14], 10); // Sat hour
+        assert_eq!(cmd[15], 0); // Sat min
     }
 }

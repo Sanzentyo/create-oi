@@ -74,7 +74,16 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
 }
 
 #[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for Error<E> {}
+impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Protocol(e) => Some(e),
+            Self::Validation(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl<E> From<ProtocolError> for Error<E> {
     fn from(e: ProtocolError) -> Self {
@@ -109,9 +118,9 @@ impl<R, E: fmt::Display> fmt::Display for TransitionError<R, E> {
 }
 
 #[cfg(feature = "std")]
-impl<R: fmt::Debug, E: fmt::Debug + fmt::Display> std::error::Error for TransitionError<R, E> {
+impl<R: fmt::Debug, E: std::error::Error + 'static> std::error::Error for TransitionError<R, E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
+        Some(&self.source)
     }
 }
 
@@ -132,8 +141,8 @@ impl<T, E: fmt::Display> fmt::Display for ConnectError<T, E> {
 }
 
 #[cfg(feature = "std")]
-impl<T: fmt::Debug, E: fmt::Debug + fmt::Display> std::error::Error for ConnectError<T, E> {
+impl<T: fmt::Debug, E: std::error::Error + 'static> std::error::Error for ConnectError<T, E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
+        Some(&self.source)
     }
 }

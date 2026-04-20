@@ -362,6 +362,76 @@ impl TryFrom<u8> for SongNumber {
 }
 
 // ---------------------------------------------------------------------------
+// Motor and button bitfield types
+// ---------------------------------------------------------------------------
+
+/// Motor enable and direction bits for the MOTORS command (opcode 138).
+///
+/// Bit layout: 0=side_brush, 1=vacuum, 2=main_brush, 3=main_brush_backward, 4=side_brush_backward.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MotorBits {
+    /// Enable the side brush motor.
+    pub side_brush: bool,
+    /// Enable the vacuum motor.
+    pub vacuum: bool,
+    /// Enable the main brush motor.
+    pub main_brush: bool,
+    /// Reverse the main brush direction (`false` = default forward direction).
+    pub main_brush_backward: bool,
+    /// Reverse the side brush direction (`false` = default forward direction).
+    pub side_brush_backward: bool,
+}
+
+impl MotorBits {
+    /// Encode to the raw OI byte.
+    pub fn to_raw(self) -> u8 {
+        (self.side_brush as u8)
+            | ((self.vacuum as u8) << 1)
+            | ((self.main_brush as u8) << 2)
+            | ((self.main_brush_backward as u8) << 3)
+            | ((self.side_brush_backward as u8) << 4)
+    }
+}
+
+/// Button simulation bits for the BUTTONS command (opcode 165, Full mode only).
+///
+/// Setting a field to `true` simulates pressing the corresponding physical button.
+/// Bit layout: 0=clean, 1=spot, 2=dock, 3=minute, 4=hour, 5=day, 6=schedule, 7=clock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ButtonBits {
+    /// Simulate pressing the Clean button.
+    pub clean: bool,
+    /// Simulate pressing the Spot button.
+    pub spot: bool,
+    /// Simulate pressing the Dock button.
+    pub dock: bool,
+    /// Simulate pressing the Minute button.
+    pub minute: bool,
+    /// Simulate pressing the Hour button.
+    pub hour: bool,
+    /// Simulate pressing the Day button.
+    pub day: bool,
+    /// Simulate pressing the Schedule button.
+    pub schedule: bool,
+    /// Simulate pressing the Clock button.
+    pub clock: bool,
+}
+
+impl ButtonBits {
+    /// Encode to the raw OI byte.
+    pub fn to_raw(self) -> u8 {
+        (self.clean as u8)
+            | ((self.spot as u8) << 1)
+            | ((self.dock as u8) << 2)
+            | ((self.minute as u8) << 3)
+            | ((self.hour as u8) << 4)
+            | ((self.day as u8) << 5)
+            | ((self.schedule as u8) << 6)
+            | ((self.clock as u8) << 7)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
 
@@ -540,5 +610,65 @@ mod tests {
     fn robot_model_baud() {
         assert_eq!(CreateRobotModel::Create2.baud(), 115_200);
         assert_eq!(CreateRobotModel::Create1.baud(), 57_600);
+    }
+
+    #[test]
+    fn motor_bits_all_off() {
+        assert_eq!(MotorBits::default().to_raw(), 0);
+    }
+
+    #[test]
+    fn motor_bits_all_on() {
+        let bits = MotorBits {
+            side_brush: true,
+            vacuum: true,
+            main_brush: true,
+            main_brush_backward: false,
+            side_brush_backward: false,
+        };
+        assert_eq!(bits.to_raw(), 0b00000111);
+    }
+
+    #[test]
+    fn motor_bits_reverse() {
+        let bits = MotorBits {
+            side_brush: true,
+            vacuum: false,
+            main_brush: true,
+            main_brush_backward: true,
+            side_brush_backward: true,
+        };
+        // bits: 0=1, 1=0, 2=1, 3=1, 4=1 → 0b11101 = 29
+        assert_eq!(bits.to_raw(), 0b11101);
+    }
+
+    #[test]
+    fn button_bits_all_off() {
+        assert_eq!(ButtonBits::default().to_raw(), 0);
+    }
+
+    #[test]
+    fn button_bits_clean_and_dock() {
+        let bits = ButtonBits {
+            clean: true,
+            dock: true,
+            ..Default::default()
+        };
+        assert_eq!(bits.to_raw(), 0b00000101);
+    }
+
+    #[test]
+    fn button_bits_all_on() {
+        let bits = ButtonBits {
+            clean: true,
+            spot: true,
+            dock: true,
+            minute: true,
+            hour: true,
+            day: true,
+            schedule: true,
+            clock: true,
+        };
+        assert_eq!(bits.to_raw(), 0xFF);
     }
 }

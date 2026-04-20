@@ -8,10 +8,11 @@
 //! This module requires the `std` feature (blocking I/O + `thread::sleep`).
 
 use crate::error::{ConnectError, Error, TransitionError};
-use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
+use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::Transport;
 use crate::types::{
-    CreateRobotModel, LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
+    AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
+    MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
@@ -214,6 +215,86 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             .map(|r| r.map_err(Error::Protocol))
             .collect()
     }
+
+    /// Read bytes from the transport and parse stream frames via callback.
+    ///
+    /// This is the no-alloc equivalent of [`poll_stream`](Self::poll_stream).
+    pub fn poll_stream_with(
+        &mut self,
+        callback: impl FnMut(Result<SensorData, create_oi_protocol::error::ProtocolError>),
+    ) -> Result<(), Error<std::io::Error>> {
+        let mut buf = [0u8; 256];
+        let n = self.transport.read(&mut buf).map_err(Error::Io)?;
+        if n > 0 {
+            self.stream_parser.feed_with(&buf[..n], callback);
+        }
+        Ok(())
+    }
+
+    /// Initiate a cleaning cycle. Transitions the robot to Passive mode.
+    ///
+    /// The OI spec defines three cleaning modes:
+    /// - [`CleanMode::Default`] — standard cleaning pattern
+    /// - [`CleanMode::Spot`] — spot cleaning (small area)
+    /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
+    pub fn clean(
+        mut self,
+        mode: CleanMode,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        let cmd = match mode {
+            CleanMode::Default => command::encode_clean(),
+            CleanMode::Spot => command::encode_spot(),
+            CleanMode::Max => command::encode_max(),
+        };
+        if let Err(e) = self.send_cmd(&cmd) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Seek the dock. Transitions the robot to Passive mode.
+    pub fn seek_dock(
+        mut self,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_dock()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Power off the robot and return the underlying transport.
+    ///
+    /// After this call the robot is powered down. To reconnect, wrap the
+    /// returned transport in a new `Create::<Off, _>::new(transport, model)`.
+    pub fn power_off(mut self) -> Result<T, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_power()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transport)
+    }
+
+    /// Reset the robot and return the underlying transport.
+    ///
+    /// After this call the robot reboots. The serial connection may need to be
+    /// re-opened before creating a new `Create::<Off, _>::new(transport, model)`.
+    pub fn reset(mut self) -> Result<T, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_reset()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transport)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +389,75 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         vacuum: i8,
     ) -> Result<(), Error<std::io::Error>> {
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
+    }
+
+    /// Enable or disable motors with direction control.
+    pub fn set_motors(&mut self, motors: MotorBits) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_motors(motors.to_raw()))
+    }
+
+    /// Set raw 7-segment digit LEDs.
+    ///
+    /// Each byte controls one digit: bits 0–6 = segments A–G, bit 7 = decimal point.
+    /// `d3` is the leftmost digit and `d0` is the rightmost.
+    pub fn set_digit_leds_raw(
+        &mut self,
+        d3: u8,
+        d2: u8,
+        d1: u8,
+        d0: u8,
+    ) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_digit_leds_raw(d3, d2, d1, d0))
+    }
+
+    /// Drive using the unicycle (twist) model: linear velocity and angular velocity.
+    ///
+    /// Computes individual wheel speeds via differential drive kinematics:
+    /// `right = v + ω × (axle/2)`, `left = v − ω × (axle/2)`.
+    /// Wheel speeds are clamped to ±500 mm/s as required by the OI spec.
+    pub fn drive_twist(
+        &mut self,
+        velocity: Velocity,
+        omega: AngularVelocity,
+    ) -> Result<(), Error<std::io::Error>> {
+        let half_axle_mm = self.model.axle_length() * 500.0;
+        let v_mm = velocity.to_mm_per_sec() as f32;
+        let right_mm = (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500);
+        let left_mm = (libm::roundf(v_mm - omega.get() * half_axle_mm) as i16).clamp(-500, 500);
+        self.send_cmd(&command::encode_drive_direct(right_mm, left_mm))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full-control commands (Full only)
+// ---------------------------------------------------------------------------
+
+impl<M: FullControl, T: Transport> Create<M, T> {
+    /// Simulate button presses on the robot (Full mode only).
+    pub fn simulate_buttons(&mut self, buttons: ButtonBits) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_buttons(buttons.to_raw()))
+    }
+
+    /// Set the robot's internal date and time (Full mode only).
+    pub fn set_date(
+        &mut self,
+        day: DayOfWeek,
+        hour: u8,
+        minute: u8,
+    ) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_date(day.to_raw(), hour, minute))
+    }
+
+    /// Set the weekly cleaning schedule (Full mode only).
+    ///
+    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday).
+    /// `times`: (hour, minute) for each day, starting with Sunday.
+    pub fn set_schedule(
+        &mut self,
+        days: u8,
+        times: [(u8, u8); 7],
+    ) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_schedule(days, times))
     }
 }
 

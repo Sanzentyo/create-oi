@@ -88,6 +88,14 @@ pub trait Actuatable: SensorReadable {}
 impl Actuatable for Safe {}
 impl Actuatable for Full {}
 
+/// Modes where Full-control commands are available: Full only.
+///
+/// Commands in this category can override all safety checks and affect
+/// robot scheduling or simulated inputs. Only [`Full`] implements this trait.
+pub trait FullControl: Actuatable {}
+
+impl FullControl for Full {}
+
 // ---------------------------------------------------------------------------
 // ModePhantom helper
 // ---------------------------------------------------------------------------

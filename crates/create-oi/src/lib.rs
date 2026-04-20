@@ -71,12 +71,15 @@ pub mod prelude {
     #[cfg(feature = "std")]
     pub use crate::create::Create;
     pub use crate::error::{ConnectError, Error, TransitionError};
-    pub use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
+    pub use crate::mode::{
+        Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable,
+    };
     pub use crate::transport::AsyncTransport;
     #[cfg(feature = "std")]
     pub use crate::transport::Transport;
     pub use crate::types::{
-        CreateRobotModel, LedIntensity, MotorPower, PowerLedColor, Radius, SongNumber, Velocity,
+        AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity,
+        MotorBits, MotorPower, PowerLedColor, Radius, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports
