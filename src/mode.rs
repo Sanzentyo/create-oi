@@ -1,86 +1,96 @@
-//! TypeState marker types for the iRobot Open Interface modes.
+//! TypeState mode markers and capability traits.
 //!
-//! The OI protocol defines four modes:
-//! - **Off**: No serial communication active.
-//! - **Passive**: Connected; sensor data available, no actuator control.
-//! - **Safe**: Full actuator control; safety features (cliff, bump) active.
-//! - **Full**: Full actuator control; all safety features disabled.
+//! The iRobot OI defines four modes. We encode them as zero-sized marker
+//! types so the compiler prevents invalid operations at each mode.
 
-use crate::types::OiMode;
+use std::marker::PhantomData;
+
+// ---------------------------------------------------------------------------
+// Sealed trait
+// ---------------------------------------------------------------------------
 
 mod sealed {
     pub trait Sealed {}
 }
 
-/// Trait implemented by all OI mode marker types.
-///
-/// Sealed so that only the four canonical modes can exist.
-pub trait Mode: sealed::Sealed + std::fmt::Debug {
-    /// The raw FFI constant for this mode.
-    const RAW: i32;
-    /// Human-readable mode name.
-    const NAME: &'static str;
-    /// The corresponding runtime [`OiMode`] variant.
-    const OI_MODE: OiMode;
-}
+// ---------------------------------------------------------------------------
+// Mode markers
+// ---------------------------------------------------------------------------
 
-/// Not connected / power off.
-#[derive(Debug, Clone, Copy)]
+/// Zero-sized marker: robot is not connected.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Off;
 
-/// Connected in passive mode (sensors only).
-#[derive(Debug, Clone, Copy)]
+/// Zero-sized marker: robot is in Passive mode (sensors only).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Passive;
 
-/// Safe mode — actuators enabled with safety limits.
-#[derive(Debug, Clone, Copy)]
+/// Zero-sized marker: robot is in Safe mode (sensors + actuators, with safety).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Safe;
 
-/// Full mode — actuators enabled, all safety features disabled.
-#[derive(Debug, Clone, Copy)]
+/// Zero-sized marker: robot is in Full mode (sensors + actuators, no safety).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Full;
 
-// Seal all mode types.
+// ---------------------------------------------------------------------------
+// Mode trait
+// ---------------------------------------------------------------------------
+
+/// Trait implemented by all OI mode markers.
+///
+/// This is sealed — external code cannot implement additional modes.
+pub trait Mode: sealed::Sealed + std::fmt::Debug + Copy + Send + Sync + 'static {
+    /// Human-readable name of this mode.
+    fn name() -> &'static str;
+}
+
 impl sealed::Sealed for Off {}
 impl sealed::Sealed for Passive {}
 impl sealed::Sealed for Safe {}
 impl sealed::Sealed for Full {}
 
 impl Mode for Off {
-    const RAW: i32 = libcreate_sys::CREATE_MODE_OFF;
-    const NAME: &'static str = "Off";
-    const OI_MODE: OiMode = OiMode::Off;
+    fn name() -> &'static str {
+        "Off"
+    }
 }
-
 impl Mode for Passive {
-    const RAW: i32 = libcreate_sys::CREATE_MODE_PASSIVE;
-    const NAME: &'static str = "Passive";
-    const OI_MODE: OiMode = OiMode::Passive;
+    fn name() -> &'static str {
+        "Passive"
+    }
 }
-
 impl Mode for Safe {
-    const RAW: i32 = libcreate_sys::CREATE_MODE_SAFE;
-    const NAME: &'static str = "Safe";
-    const OI_MODE: OiMode = OiMode::Safe;
+    fn name() -> &'static str {
+        "Safe"
+    }
 }
-
 impl Mode for Full {
-    const RAW: i32 = libcreate_sys::CREATE_MODE_FULL;
-    const NAME: &'static str = "Full";
-    const OI_MODE: OiMode = OiMode::Full;
+    fn name() -> &'static str {
+        "Full"
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Capability traits — bound what operations are available in which modes.
+// Capability traits (sealed)
 // ---------------------------------------------------------------------------
 
-/// Modes where sensor data can be read (Passive, Safe, Full).
+/// Modes where sensor reading is available: Passive, Safe, Full.
 pub trait SensorReadable: Mode {}
+
 impl SensorReadable for Passive {}
 impl SensorReadable for Safe {}
 impl SensorReadable for Full {}
 
-/// Modes where actuator commands (drive, motors, LEDs) are available (Safe, Full).
-pub trait Actuatable: Mode {}
+/// Modes where actuator commands are available: Safe, Full.
+pub trait Actuatable: SensorReadable {}
+
 impl Actuatable for Safe {}
 impl Actuatable for Full {}
+
+// ---------------------------------------------------------------------------
+// ModePhantom helper
+// ---------------------------------------------------------------------------
+
+/// Convenience alias for a zero-sized, `Send`+`Sync` mode phantom.
+pub type ModePhantom<M> = PhantomData<M>;

@@ -2,24 +2,24 @@
 
 use thiserror::Error;
 
-/// Main error type for libcreate operations.
+/// Errors that can occur when interacting with the robot.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Failed to create the robot handle (allocation or C++ exception).
-    #[error("failed to create robot handle")]
-    HandleCreationFailed,
+    /// An underlying I/O operation failed.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 
-    /// Failed to connect to the robot over serial.
-    #[error("connection failed on port `{port}`")]
-    ConnectionFailed { port: String },
+    /// A value was invalid for its domain type.
+    #[error("invalid value for {field}: {reason}")]
+    InvalidValue { field: &'static str, reason: String },
 
-    /// The robot is not currently connected.
-    #[error("robot is not connected")]
-    NotConnected,
+    /// The OI protocol reported an unexpected or malformed response.
+    #[error("protocol error: {0}")]
+    Protocol(String),
 
-    /// A command sent to the robot failed at the FFI layer.
-    #[error("command failed")]
-    CommandFailed,
+    /// A checksum in a sensor stream frame did not match.
+    #[error("checksum mismatch: expected {expected:#04x}, got {actual:#04x}")]
+    Checksum { expected: u8, actual: u8 },
 
     /// The actual OI mode on the hardware does not match the expected TypeState.
     #[error("mode mismatch: expected {expected}, actual {actual}")]
@@ -28,33 +28,59 @@ pub enum Error {
         actual: &'static str,
     },
 
-    /// A value was out of the valid range.
-    #[error("value {value} out of range [{min}, {max}]")]
-    OutOfRange { value: f32, min: f32, max: f32 },
+    /// Connection to the robot failed.
+    #[error("connection failed: {0}")]
+    Connection(String),
 
-    /// A floating-point value was NaN or infinite.
-    #[error("value must be finite (got {0})")]
-    NotFinite(f32),
+    /// The robot is not connected.
+    #[error("robot not connected")]
+    NotConnected,
+
+    /// Not enough bytes available to parse a sensor response.
+    #[error("sensor data too short: need {need} bytes, got {got}")]
+    InsufficientData { need: usize, got: usize },
 }
 
-/// Error returned when a mode transition fails, preserving the robot in its
-/// original state so the caller can recover.
+/// Error returned when a mode transition fails, preserving the robot
+/// so the caller can recover.
 #[derive(Debug)]
-pub struct TransitionError<M: crate::mode::Mode> {
+pub struct TransitionError<R> {
     /// The robot, returned in its original mode.
-    pub robot: crate::robot::Robot<M>,
+    pub robot: R,
     /// The underlying error.
-    pub error: Error,
+    pub source: Error,
 }
 
-impl<M: crate::mode::Mode> std::fmt::Display for TransitionError<M> {
+impl<R> std::fmt::Display for TransitionError<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "mode transition failed: {}", self.error)
+        write!(f, "mode transition failed: {}", self.source)
     }
 }
 
-impl<M: crate::mode::Mode> std::error::Error for TransitionError<M> {
+impl<R: std::fmt::Debug> std::error::Error for TransitionError<R> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
+        Some(&self.source)
+    }
+}
+
+/// Error returned when `connect()` fails, preserving the transport
+/// so the caller can retry or reuse it.
+#[derive(Debug)]
+pub struct ConnectError<T> {
+    /// The transport handle, returned to the caller.
+    pub transport: T,
+    /// The underlying error.
+    pub source: Error,
+}
+
+impl<T> std::fmt::Display for ConnectError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "connect failed: {}", self.source)
+    }
+}
+
+impl<T: std::fmt::Debug> std::error::Error for ConnectError<T> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
     }
 }

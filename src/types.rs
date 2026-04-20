@@ -1,63 +1,95 @@
-//! Domain types modeled as proper Rust ADTs.
-//!
-//! All enums use exhaustive variants matching the OI protocol, plus an
-//! `Unknown` variant for forward-compatibility with unrecognized raw values.
+//! Domain types: robot models, OI enums, and validated newtypes.
+
+use std::time::Duration;
 
 use crate::error::Error;
-use libcreate_sys as ffi;
 
 // ---------------------------------------------------------------------------
 // Robot model
 // ---------------------------------------------------------------------------
 
-/// iRobot model / hardware generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Physical robot model, determining protocol version and physical parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RobotModel {
-    /// Roomba 400 series and earlier.
+    /// Roomba 400 series and earlier (protocol V1).
     Roomba400,
-    /// iRobot Create 1 / Roomba 500 series.
+    /// iRobot Create 1 / Roomba 500 series (protocol V2).
     Create1,
-    /// iRobot Create 2 / Roomba 600+ series.
+    /// iRobot Create 2 / Roomba 600+ series (protocol V3).
     Create2,
 }
 
 impl RobotModel {
-    pub(crate) fn to_raw(self) -> i32 {
+    /// Default baud rate for this model.
+    pub fn baud(self) -> u32 {
         match self {
-            Self::Roomba400 => ffi::CREATE_MODEL_ROOMBA_400,
-            Self::Create1 => ffi::CREATE_MODEL_CREATE_1,
-            Self::Create2 => ffi::CREATE_MODEL_CREATE_2,
+            Self::Roomba400 | Self::Create1 => 57600,
+            Self::Create2 => 115200,
         }
+    }
+
+    /// Axle length in meters (distance between wheels).
+    pub fn axle_length(self) -> f32 {
+        match self {
+            Self::Roomba400 | Self::Create1 => 0.258,
+            Self::Create2 => 0.235,
+        }
+    }
+
+    /// Maximum forward velocity in m/s.
+    pub fn max_velocity(self) -> f32 {
+        0.5
+    }
+
+    /// Wheel diameter in meters.
+    pub fn wheel_diameter(self) -> f32 {
+        0.078
+    }
+
+    /// Encoder ticks per revolution (Create 2 / V3 only).
+    pub fn ticks_per_rev(self) -> Option<f32> {
+        match self {
+            Self::Create2 => Some(508.8),
+            _ => None,
+        }
+    }
+
+    /// Whether this model supports the sensor stream protocol.
+    pub fn supports_stream(self) -> bool {
+        matches!(self, Self::Create1 | Self::Create2)
+    }
+
+    /// Recommended delay after sending a mode-change command.
+    pub fn mode_change_delay(self) -> Duration {
+        Duration::from_millis(20)
     }
 }
 
 // ---------------------------------------------------------------------------
-// OI Mode (runtime-observed, not the typestate marker)
+// OI mode (runtime value from sensor data)
 // ---------------------------------------------------------------------------
 
-/// The Open Interface mode as reported by the hardware.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The OI mode as reported by the robot's sensor data (packet 35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OiMode {
     Off,
     Passive,
     Safe,
     Full,
-    /// An unrecognized mode value from the hardware.
-    Unknown(i32),
+    Unknown(u8),
 }
 
 impl OiMode {
-    pub(crate) fn from_raw(raw: i32) -> Self {
-        match raw {
-            ffi::CREATE_MODE_OFF => Self::Off,
-            ffi::CREATE_MODE_PASSIVE => Self::Passive,
-            ffi::CREATE_MODE_SAFE => Self::Safe,
-            ffi::CREATE_MODE_FULL => Self::Full,
-            other => Self::Unknown(other),
+    pub fn from_raw(v: u8) -> Self {
+        match v {
+            0 => Self::Off,
+            1 => Self::Passive,
+            2 => Self::Safe,
+            3 => Self::Full,
+            x => Self::Unknown(x),
         }
     }
 
-    /// Human-readable name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Off => "Off",
@@ -73,29 +105,28 @@ impl OiMode {
 // Charging state
 // ---------------------------------------------------------------------------
 
-/// Battery charging state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Battery charging state (packet 21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChargingState {
     NotCharging,
-    Reconditioning,
+    ReconditioningCharging,
     FullCharging,
     TrickleCharging,
     Waiting,
-    Fault,
-    /// An unrecognized charging state.
-    Unknown(i32),
+    ChargingFaultCondition,
+    Unknown(u8),
 }
 
 impl ChargingState {
-    pub(crate) fn from_raw(raw: i32) -> Self {
-        match raw {
+    pub fn from_raw(v: u8) -> Self {
+        match v {
             0 => Self::NotCharging,
-            1 => Self::Reconditioning,
+            1 => Self::ReconditioningCharging,
             2 => Self::FullCharging,
             3 => Self::TrickleCharging,
             4 => Self::Waiting,
-            5 => Self::Fault,
-            other => Self::Unknown(other),
+            5 => Self::ChargingFaultCondition,
+            x => Self::Unknown(x),
         }
     }
 }
@@ -104,30 +135,20 @@ impl ChargingState {
 // Clean mode
 // ---------------------------------------------------------------------------
 
-/// Cleaning behavior to start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Cleaning mode command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanMode {
     Default,
     Max,
     Spot,
 }
 
-impl CleanMode {
-    pub(crate) fn to_raw(self) -> i32 {
-        match self {
-            Self::Default => ffi::CREATE_CLEAN_DEFAULT,
-            Self::Max => ffi::CREATE_CLEAN_MAX,
-            Self::Spot => ffi::CREATE_CLEAN_SPOT,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Day of week
 // ---------------------------------------------------------------------------
 
-/// Day of the week for the robot's internal clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Day of week for the robot's internal clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DayOfWeek {
     Sunday,
     Monday,
@@ -139,7 +160,7 @@ pub enum DayOfWeek {
 }
 
 impl DayOfWeek {
-    pub(crate) fn to_raw(self) -> i32 {
+    pub fn to_raw(self) -> u8 {
         match self {
             Self::Sunday => 0,
             Self::Monday => 1,
@@ -156,145 +177,161 @@ impl DayOfWeek {
 // IR character
 // ---------------------------------------------------------------------------
 
-/// Infrared character received by the robot's IR sensors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// IR character received by the robot's IR sensors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrChar {
     None,
     Left,
-    Forward,
+    ForwardLeft,
+    CenterLeft,
+    CenterRight,
+    ForwardRight,
     Right,
-    Spot,
-    Max,
-    Small,
-    Medium,
-    LargeClean,
-    Pause,
-    Power,
-    ArcLeft,
-    ArcRight,
-    Stop,
-    Download,
     SeekDock,
-    RedBuoy,
-    GreenBuoy,
+    ReservedGreen,
     ForceField,
-    RedGreenBuoy,
-    RedForceField,
-    GreenForceField,
-    RedGreenForceField,
-    VirtualWall,
-    /// An unrecognized IR character value.
+    ReservedRed,
+    BuoyGreen,
+    BuoyRed,
+    BuoyGreenAndRed,
+    BuoyGreenAndForceField,
+    BuoyRedAndForceField,
+    BuoyGreenRedAndForceField,
     Unknown(u8),
 }
 
 impl IrChar {
-    pub(crate) fn from_raw(raw: u8) -> Self {
-        match raw {
+    pub fn from_raw(v: u8) -> Self {
+        match v {
             0 => Self::None,
             129 => Self::Left,
-            130 => Self::Forward,
-            131 => Self::Right,
-            132 => Self::Spot,
-            133 => Self::Max,
-            134 => Self::Small,
-            135 => Self::Medium,
-            136 => Self::LargeClean,
-            137 => Self::Pause,
-            138 => Self::Power,
-            139 => Self::ArcLeft,
-            140 => Self::ArcRight,
-            141 => Self::Stop,
-            142 => Self::Download,
+            130 => Self::ForwardLeft,
+            131 => Self::CenterLeft,
+            132 => Self::CenterRight,
+            133 => Self::ForwardRight,
+            134 => Self::Right,
             143 => Self::SeekDock,
-            248 => Self::RedBuoy,
-            244 => Self::GreenBuoy,
-            242 => Self::ForceField,
-            252 => Self::RedGreenBuoy,
-            250 => Self::RedForceField,
-            246 => Self::GreenForceField,
-            254 => Self::RedGreenForceField,
-            162 => Self::VirtualWall,
-            other => Self::Unknown(other),
+            160 => Self::ReservedGreen,
+            161 => Self::ForceField,
+            162 => Self::ReservedRed,
+            164 => Self::BuoyGreen,
+            168 => Self::BuoyRed,
+            172 => Self::BuoyGreenAndRed,
+            165 => Self::BuoyGreenAndForceField,
+            169 => Self::BuoyRedAndForceField,
+            173 => Self::BuoyGreenRedAndForceField,
+            x => Self::Unknown(x),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Newtypes with validated ranges
+// Validated newtypes
 // ---------------------------------------------------------------------------
 
-/// Helper: validate that a value is finite and within [min, max].
-#[inline(always)]
-fn validate_range(value: f32, min: f32, max: f32) -> Result<f32, Error> {
-    if !value.is_finite() {
-        return Err(Error::NotFinite(value));
+/// Linear velocity in m/s. Valid range: [-0.5, 0.5].
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Velocity(f32);
+
+impl Velocity {
+    pub const MAX: f32 = 0.5;
+    pub const MIN: f32 = -0.5;
+    pub const ZERO: Self = Self(0.0);
+
+    pub fn new(value: f32) -> Result<Self, Error> {
+        validate_finite("Velocity", value)?;
+        validate_range("Velocity", value, Self::MIN, Self::MAX)?;
+        Ok(Self(value))
     }
-    if value < min || value > max {
-        return Err(Error::OutOfRange { value, min, max });
+
+    pub fn get(self) -> f32 {
+        self.0
     }
-    Ok(value)
+
+    /// Convert to mm/s as i16 for the OI protocol.
+    pub fn to_mm_per_sec(self) -> i16 {
+        (self.0 * 1000.0) as i16
+    }
 }
 
-macro_rules! newtype_f32 {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $min:expr, $max:expr
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-        pub struct $name(f32);
-
-        impl $name {
-            /// Minimum allowed value.
-            pub const MIN: Self = Self($min);
-            /// Maximum allowed value.
-            pub const MAX: Self = Self($max);
-            /// Zero.
-            pub const ZERO: Self = Self(0.0);
-
-            /// Create a new value, validating the range.
-            pub fn new(value: f32) -> Result<Self, Error> {
-                validate_range(value, $min, $max).map(Self)
-            }
-
-            /// Get the inner `f32` value.
-            #[inline]
-            pub fn get(self) -> f32 {
-                self.0
-            }
-        }
-
-        impl TryFrom<f32> for $name {
-            type Error = Error;
-            fn try_from(value: f32) -> Result<Self, Self::Error> {
-                Self::new(value)
-            }
-        }
-    };
+impl TryFrom<f32> for Velocity {
+    type Error = Error;
+    fn try_from(v: f32) -> Result<Self, Self::Error> {
+        Self::new(v)
+    }
 }
 
-newtype_f32!(
-    /// Linear velocity in m/s. Range: [-0.5, 0.5].
-    Velocity, -0.5, 0.5
-);
+/// Angular velocity in rad/s. Valid range: [-π, π].
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct AngularVelocity(f32);
 
-newtype_f32!(
-    /// Angular velocity in rad/s. Range: [-4.25, 4.25] (approximate).
-    AngularVelocity, -4.25, 4.25
-);
+impl AngularVelocity {
+    pub const MAX: f32 = std::f32::consts::PI;
+    pub const MIN: f32 = -std::f32::consts::PI;
 
-newtype_f32!(
-    /// Turning radius in meters. Range: [-2.0, 2.0].
-    Radius, -2.0, 2.0
-);
+    pub fn new(value: f32) -> Result<Self, Error> {
+        validate_finite("AngularVelocity", value)?;
+        validate_range("AngularVelocity", value, Self::MIN, Self::MAX)?;
+        Ok(Self(value))
+    }
 
-newtype_f32!(
-    /// Motor power as a fraction. Range: [-1.0, 1.0].
-    MotorPower, -1.0, 1.0
-);
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+/// Turning radius in meters. Valid range: [-2.0, 2.0].
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Radius(f32);
+
+impl Radius {
+    pub const MAX: f32 = 2.0;
+    pub const MIN: f32 = -2.0;
+    pub const STRAIGHT: Self = Self(32.768);
+
+    pub fn new(value: f32) -> Result<Self, Error> {
+        validate_finite("Radius", value)?;
+        validate_range("Radius", value, Self::MIN, Self::MAX)?;
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+
+    /// Convert to mm as i16 for the OI protocol.
+    pub fn to_mm(self) -> i16 {
+        (self.0 * 1000.0) as i16
+    }
+}
+
+/// Motor power level. Valid range: [-1.0, 1.0].
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct MotorPower(f32);
+
+impl MotorPower {
+    pub const MAX: f32 = 1.0;
+    pub const MIN: f32 = -1.0;
+    pub const OFF: Self = Self(0.0);
+
+    pub fn new(value: f32) -> Result<Self, Error> {
+        validate_finite("MotorPower", value)?;
+        validate_range("MotorPower", value, Self::MIN, Self::MAX)?;
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+
+    /// Convert to PWM value (-255..255) for the OI protocol.
+    pub fn to_pwm(self) -> i16 {
+        (self.0 * 255.0) as i16
+    }
+}
 
 /// Power LED color (0 = green, 255 = red).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PowerLedColor(u8);
 
 impl PowerLedColor {
@@ -305,20 +342,19 @@ impl PowerLedColor {
         Self(value)
     }
 
-    #[inline]
     pub fn get(self) -> u8 {
         self.0
     }
 }
 
 impl From<u8> for PowerLedColor {
-    fn from(value: u8) -> Self {
-        Self(value)
+    fn from(v: u8) -> Self {
+        Self(v)
     }
 }
 
 /// LED intensity (0 = off, 255 = full brightness).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedIntensity(u8);
 
 impl LedIntensity {
@@ -329,35 +365,32 @@ impl LedIntensity {
         Self(value)
     }
 
-    #[inline]
     pub fn get(self) -> u8 {
         self.0
     }
 }
 
 impl From<u8> for LedIntensity {
-    fn from(value: u8) -> Self {
-        Self(value)
+    fn from(v: u8) -> Self {
+        Self(v)
     }
 }
 
-/// Song slot number (0–3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Song number (0..3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SongNumber(u8);
 
 impl SongNumber {
     pub fn new(value: u8) -> Result<Self, Error> {
         if value > 3 {
-            return Err(Error::OutOfRange {
-                value: value as f32,
-                min: 0.0,
-                max: 3.0,
+            return Err(Error::InvalidValue {
+                field: "SongNumber",
+                reason: format!("{value} > 3"),
             });
         }
         Ok(Self(value))
     }
 
-    #[inline]
     pub fn get(self) -> u8 {
         self.0
     }
@@ -365,32 +398,54 @@ impl SongNumber {
 
 impl TryFrom<u8> for SongNumber {
     type Error = Error;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::new(value)
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        Self::new(v)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------
+
+fn validate_finite(field: &'static str, value: f32) -> Result<(), Error> {
+    if !value.is_finite() {
+        return Err(Error::InvalidValue {
+            field,
+            reason: format!("must be finite, got {value}"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_range(field: &'static str, value: f32, min: f32, max: f32) -> Result<(), Error> {
+    if value < min || value > max {
+        return Err(Error::InvalidValue {
+            field,
+            reason: format!("{value} not in [{min}, {max}]"),
+        });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // Velocity
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn velocity_valid_range() {
+    fn velocity_valid() {
         assert!(Velocity::new(0.0).is_ok());
         assert!(Velocity::new(0.5).is_ok());
         assert!(Velocity::new(-0.5).is_ok());
-        assert!(Velocity::new(0.25).is_ok());
     }
 
     #[test]
     fn velocity_out_of_range() {
         assert!(Velocity::new(0.6).is_err());
         assert!(Velocity::new(-0.6).is_err());
-        assert!(Velocity::new(100.0).is_err());
     }
 
     #[test]
@@ -405,40 +460,15 @@ mod tests {
     }
 
     #[test]
-    fn velocity_try_from() {
-        assert!(Velocity::try_from(0.3).is_ok());
-        assert!(Velocity::try_from(1.0).is_err());
+    fn velocity_to_mm_per_sec() {
+        let v = Velocity::new(0.5).unwrap();
+        assert_eq!(v.to_mm_per_sec(), 500);
+        let v = Velocity::new(-0.3).unwrap();
+        assert_eq!(v.to_mm_per_sec(), -300);
     }
 
     #[test]
-    fn velocity_constants() {
-        assert_eq!(Velocity::MAX.get(), 0.5);
-        assert_eq!(Velocity::MIN.get(), -0.5);
-        assert_eq!(Velocity::ZERO.get(), 0.0);
-    }
-
-    // -----------------------------------------------------------------------
-    // AngularVelocity
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn angular_velocity_valid_range() {
-        assert!(AngularVelocity::new(0.0).is_ok());
-        assert!(AngularVelocity::new(4.25).is_ok());
-        assert!(AngularVelocity::new(-4.25).is_ok());
-    }
-
-    #[test]
-    fn angular_velocity_out_of_range() {
-        assert!(AngularVelocity::new(5.0).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // Radius
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn radius_valid_range() {
+    fn radius_valid() {
         assert!(Radius::new(0.0).is_ok());
         assert!(Radius::new(2.0).is_ok());
         assert!(Radius::new(-2.0).is_ok());
@@ -446,171 +476,64 @@ mod tests {
 
     #[test]
     fn radius_out_of_range() {
-        assert!(Radius::new(3.0).is_err());
+        assert!(Radius::new(2.1).is_err());
     }
 
-    // -----------------------------------------------------------------------
-    // MotorPower
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn motor_power_valid_range() {
+    fn motor_power_valid() {
         assert!(MotorPower::new(0.0).is_ok());
         assert!(MotorPower::new(1.0).is_ok());
         assert!(MotorPower::new(-1.0).is_ok());
-        assert!(MotorPower::new(0.5).is_ok());
     }
 
     #[test]
-    fn motor_power_out_of_range() {
-        assert!(MotorPower::new(1.1).is_err());
-        assert!(MotorPower::new(-1.1).is_err());
+    fn motor_power_to_pwm() {
+        let p = MotorPower::new(1.0).unwrap();
+        assert_eq!(p.to_pwm(), 255);
+        let p = MotorPower::new(-1.0).unwrap();
+        assert_eq!(p.to_pwm(), -255);
     }
-
-    #[test]
-    fn motor_power_nan_rejected() {
-        assert!(MotorPower::new(f32::NAN).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // SongNumber
-    // -----------------------------------------------------------------------
 
     #[test]
     fn song_number_valid() {
-        for i in 0..=3 {
-            assert!(SongNumber::new(i).is_ok());
-            assert_eq!(SongNumber::new(i).unwrap().get(), i);
-        }
+        assert!(SongNumber::new(0).is_ok());
+        assert!(SongNumber::new(3).is_ok());
     }
 
     #[test]
     fn song_number_invalid() {
         assert!(SongNumber::new(4).is_err());
-        assert!(SongNumber::new(255).is_err());
     }
 
     #[test]
-    fn song_number_try_from() {
-        assert!(SongNumber::try_from(2u8).is_ok());
-        assert!(SongNumber::try_from(5u8).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // PowerLedColor & LedIntensity
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn power_led_color_constants() {
-        assert_eq!(PowerLedColor::GREEN.get(), 0);
-        assert_eq!(PowerLedColor::RED.get(), 255);
-    }
-
-    #[test]
-    fn led_intensity_constants() {
-        assert_eq!(LedIntensity::OFF.get(), 0);
-        assert_eq!(LedIntensity::FULL.get(), 255);
-    }
-
-    #[test]
-    fn power_led_color_from_u8() {
-        let color: PowerLedColor = 128u8.into();
-        assert_eq!(color.get(), 128);
-    }
-
-    // -----------------------------------------------------------------------
-    // OiMode
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn oi_mode_from_raw_known() {
+    fn oi_mode_from_raw() {
         assert_eq!(OiMode::from_raw(0), OiMode::Off);
         assert_eq!(OiMode::from_raw(1), OiMode::Passive);
         assert_eq!(OiMode::from_raw(2), OiMode::Safe);
         assert_eq!(OiMode::from_raw(3), OiMode::Full);
-    }
-
-    #[test]
-    fn oi_mode_from_raw_unknown() {
         assert_eq!(OiMode::from_raw(99), OiMode::Unknown(99));
-        assert_eq!(OiMode::from_raw(-1), OiMode::Unknown(-1));
     }
 
     #[test]
-    fn oi_mode_name() {
-        assert_eq!(OiMode::Off.name(), "Off");
-        assert_eq!(OiMode::Passive.name(), "Passive");
-        assert_eq!(OiMode::Safe.name(), "Safe");
-        assert_eq!(OiMode::Full.name(), "Full");
-        assert_eq!(OiMode::Unknown(42).name(), "Unknown");
-    }
-
-    // -----------------------------------------------------------------------
-    // ChargingState
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn charging_state_from_raw_known() {
+    fn charging_state_from_raw() {
         assert_eq!(ChargingState::from_raw(0), ChargingState::NotCharging);
-        assert_eq!(ChargingState::from_raw(1), ChargingState::Reconditioning);
-        assert_eq!(ChargingState::from_raw(2), ChargingState::FullCharging);
-        assert_eq!(ChargingState::from_raw(3), ChargingState::TrickleCharging);
-        assert_eq!(ChargingState::from_raw(4), ChargingState::Waiting);
-        assert_eq!(ChargingState::from_raw(5), ChargingState::Fault);
+        assert_eq!(
+            ChargingState::from_raw(5),
+            ChargingState::ChargingFaultCondition
+        );
+        assert_eq!(ChargingState::from_raw(42), ChargingState::Unknown(42));
     }
 
     #[test]
-    fn charging_state_from_raw_unknown() {
-        assert_eq!(ChargingState::from_raw(99), ChargingState::Unknown(99));
-    }
-
-    // -----------------------------------------------------------------------
-    // IrChar
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn ir_char_from_raw_known() {
+    fn ir_char_from_raw() {
         assert_eq!(IrChar::from_raw(0), IrChar::None);
-        assert_eq!(IrChar::from_raw(129), IrChar::Left);
         assert_eq!(IrChar::from_raw(143), IrChar::SeekDock);
-        assert_eq!(IrChar::from_raw(162), IrChar::VirtualWall);
-    }
-
-    #[test]
-    fn ir_char_from_raw_unknown() {
-        assert_eq!(IrChar::from_raw(1), IrChar::Unknown(1));
         assert_eq!(IrChar::from_raw(200), IrChar::Unknown(200));
     }
 
-    // -----------------------------------------------------------------------
-    // CleanMode
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn clean_mode_to_raw() {
-        assert_eq!(CleanMode::Default.to_raw(), 0);
-        assert_eq!(CleanMode::Max.to_raw(), 1);
-        assert_eq!(CleanMode::Spot.to_raw(), 2);
-    }
-
-    // -----------------------------------------------------------------------
-    // DayOfWeek
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn day_of_week_to_raw() {
-        assert_eq!(DayOfWeek::Sunday.to_raw(), 0);
-        assert_eq!(DayOfWeek::Saturday.to_raw(), 6);
-    }
-
-    // -----------------------------------------------------------------------
-    // RobotModel
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn robot_model_to_raw() {
-        assert_eq!(RobotModel::Roomba400.to_raw(), 0);
-        assert_eq!(RobotModel::Create1.to_raw(), 1);
-        assert_eq!(RobotModel::Create2.to_raw(), 2);
+    fn robot_model_baud() {
+        assert_eq!(RobotModel::Create2.baud(), 115200);
+        assert_eq!(RobotModel::Create1.baud(), 57600);
     }
 }

@@ -1,577 +1,343 @@
-//! TypeState-based robot API.
+//! Synchronous robot API with TypeState mode tracking.
 //!
-//! `Robot<M>` represents a connection to an iRobot Create / Roomba in OI mode
-//! `M`. Mode transitions consume `self` and return the robot in the new mode,
-//! preventing use of commands that are invalid for the current mode at compile
-//! time.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use libcreate::{Robot, RobotModel, mode};
-//!
-//! let robot = Robot::new(RobotModel::Create2)?;
-//! let robot = robot.connect("/dev/ttyUSB0", 115200)?;
-//! let mut robot = robot.into_safe()?;
-//! robot.drive(0.2.try_into()?, 0.0.try_into()?)?;
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
+//! `Robot<M, T>` wraps a [`Transport`](crate::transport::Transport) and
+//! encodes the current OI mode as a type parameter. Commands that require
+//! specific modes are only available on the relevant `Robot<Safe, T>` or
+//! `Robot<Full, T>` specialisations.
 
-use std::ffi::CString;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-
-use libcreate_sys as ffi;
-
-use crate::error::{Error, TransitionError};
+use crate::error::{ConnectError, Error, TransitionError};
 use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
-use crate::sensor::SensorSnapshot;
+use crate::protocol::command;
+use crate::protocol::sensor::{self, SensorData};
+use crate::protocol::stream::StreamParser;
+use crate::transport::Transport;
 use crate::types::{
-    AngularVelocity, CleanMode, DayOfWeek, LedIntensity, MotorPower, OiMode, PowerLedColor, Radius,
-    RobotModel, SongNumber, Velocity,
+    LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
 };
+use std::marker::PhantomData;
 
-/// An iRobot Create / Roomba robot connection parameterized by its OI mode.
+/// A synchronous robot handle, parameterised by OI mode `M` and transport `T`.
 ///
-/// The type parameter `M` is one of [`Off`], [`Passive`], [`Safe`], or
-/// [`Full`], encoding the current Open Interface mode at the type level.
-///
-/// `Robot` is intentionally `!Send` and `!Sync` because the underlying C++
-/// library uses internal threads that are not safe to access from multiple
-/// Rust threads.
-pub struct Robot<M: Mode> {
-    handle: NonNull<ffi::create_robot_handle_t>,
+/// Mode transitions consume `self` and return a new `Robot` in the target mode,
+/// ensuring the compiler enforces valid mode sequences.
+#[derive(Debug)]
+pub struct Robot<M: Mode, T: Transport> {
+    transport: T,
     model: RobotModel,
+    stream_parser: StreamParser,
     _mode: PhantomData<M>,
-    /// Make `Robot` !Send + !Sync.
-    _not_send_sync: PhantomData<*const ()>,
 }
 
-// Safety: Robot must NOT be Send or Sync. The PhantomData<*const ()> ensures
-// this, but let's be explicit:
-static_assertions::assert_not_impl_any!(Robot<Off>: Send, Sync);
-static_assertions::assert_not_impl_any!(Robot<Passive>: Send, Sync);
-static_assertions::assert_not_impl_any!(Robot<Safe>: Send, Sync);
-static_assertions::assert_not_impl_any!(Robot<Full>: Send, Sync);
+// ---------------------------------------------------------------------------
+// Construction (Off mode)
+// ---------------------------------------------------------------------------
 
-impl<M: Mode> Drop for Robot<M> {
-    fn drop(&mut self) {
-        unsafe {
-            // Disconnect if connected, then destroy the handle.
-            ffi::create_robot_disconnect(self.handle.as_ptr());
-            ffi::create_robot_destroy(self.handle.as_ptr());
+impl<T: Transport> Robot<Off, T> {
+    /// Create a new robot handle wrapping the given transport.
+    /// The robot is assumed to be in the `Off` state.
+    pub fn new(transport: T, model: RobotModel) -> Self {
+        Self {
+            transport,
+            model,
+            stream_parser: StreamParser::new(),
+            _mode: PhantomData,
         }
     }
-}
 
-impl<M: Mode> std::fmt::Debug for Robot<M> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Robot")
-            .field("mode", &M::NAME)
-            .field("model", &self.model)
-            .finish()
+    /// Send the START command and transition to Passive mode.
+    pub fn start(mut self) -> Result<Robot<Passive, T>, ConnectError<T>> {
+        if let Err(e) = self.send_cmd(&command::encode_start()) {
+            return Err(ConnectError {
+                transport: self.transport,
+                source: e,
+            });
+        }
+        self.sleep_mode_change();
+        Ok(self.transition())
     }
 }
 
 // ---------------------------------------------------------------------------
-// Off mode — construction and connection
+// Mode transitions (available from Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl Robot<Off> {
-    /// Create a new robot handle (not yet connected).
-    ///
-    /// This allocates the internal C++ object but does not open a serial
-    /// connection. Call [`connect`](Robot::connect) to establish communication.
-    pub fn new(model: RobotModel) -> Result<Self, Error> {
-        let ptr = unsafe { ffi::create_robot_new(model.to_raw()) };
-        let handle = NonNull::new(ptr).ok_or(Error::HandleCreationFailed)?;
-        Ok(Self {
-            handle,
-            model,
-            _mode: PhantomData,
-            _not_send_sync: PhantomData,
-        })
-    }
-
-    /// Connect to the robot over a serial port and enter Passive mode.
-    ///
-    /// The OI specification requires that connection always starts in Passive
-    /// mode. On failure, the robot is returned in Off mode for reuse.
-    pub fn connect(self, port: &str, baud: u32) -> Result<Robot<Passive>, TransitionError<Off>> {
-        let c_port = match CString::new(port) {
-            Ok(s) => s,
-            Err(_) => {
-                return Err(TransitionError {
-                    error: Error::ConnectionFailed {
-                        port: port.to_owned(),
-                    },
-                    robot: self,
-                });
-            }
-        };
-
-        let handle = self.handle;
-        let model = self.model;
-        std::mem::forget(self);
-
-        let rc =
-            unsafe { ffi::create_robot_connect(handle.as_ptr(), c_port.as_ptr(), baud as i32) };
-
-        if rc != ffi::CREATE_OK {
-            let robot = Robot::<Off> {
-                handle,
-                model,
-                _mode: PhantomData,
-                _not_send_sync: PhantomData,
-            };
+impl<T: Transport> Robot<Passive, T> {
+    /// Transition to Safe mode.
+    pub fn to_safe(mut self) -> Result<Robot<Safe, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
-                error: Error::ConnectionFailed {
-                    port: port.to_owned(),
-                },
-                robot,
+                robot: self,
+                source: e,
             });
         }
+        self.sleep_mode_change();
+        Ok(self.transition())
+    }
 
-        // Enable mode-report workaround for more reliable mode tracking.
-        unsafe {
-            ffi::create_robot_set_mode_report_workaround(handle.as_ptr(), 1);
+    /// Transition to Full mode.
+    pub fn to_full(mut self) -> Result<Robot<Full, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_full()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
         }
+        self.sleep_mode_change();
+        Ok(self.transition())
+    }
+}
 
-        Ok(Robot::<Passive> {
-            handle,
-            model,
-            _mode: PhantomData,
-            _not_send_sync: PhantomData,
-        })
+impl<T: Transport> Robot<Safe, T> {
+    /// Transition to Full mode.
+    pub fn to_full(mut self) -> Result<Robot<Full, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_full()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        self.sleep_mode_change();
+        Ok(self.transition())
+    }
+
+    /// Fall back to Passive mode (sends START).
+    pub fn to_passive(mut self) -> Result<Robot<Passive, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_start()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        self.sleep_mode_change();
+        Ok(self.transition())
+    }
+}
+
+impl<T: Transport> Robot<Full, T> {
+    /// Fall back to Safe mode.
+    pub fn to_safe(mut self) -> Result<Robot<Safe, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_safe()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        self.sleep_mode_change();
+        Ok(self.transition())
+    }
+
+    /// Fall back to Passive mode (sends START).
+    pub fn to_passive(mut self) -> Result<Robot<Passive, T>, TransitionError<Self>> {
+        if let Err(e) = self.send_cmd(&command::encode_start()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        self.sleep_mode_change();
+        Ok(self.transition())
     }
 }
 
 // ---------------------------------------------------------------------------
-// Shared methods for all connected modes
+// Sensor reading (Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-/// Methods available in any connected mode.
-impl<M: SensorReadable> Robot<M> {
-    /// Read a complete sensor snapshot atomically.
-    pub fn sensors(&mut self) -> Result<SensorSnapshot, Error> {
-        let mut raw = libcreate_sys::create_sensor_snapshot_t::default();
-        let rc = unsafe { ffi::create_robot_get_sensors(self.handle.as_ptr(), &mut raw) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
+impl<M: SensorReadable, T: Transport> Robot<M, T> {
+    /// Query a single sensor packet by ID and return the raw bytes.
+    pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
+        self.send_cmd(&command::encode_sensors(packet_id))?;
+
+        let info = crate::protocol::opcode::packet_info(packet_id)
+            .ok_or_else(|| Error::Protocol(format!("unknown packet id {packet_id}")))?;
+        let mut buf = vec![0u8; info.len as usize];
+        self.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Query a single sensor packet and decode it.
+    pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error> {
+        let raw = self.query_sensor_raw(packet_id)?;
+        let mut sd = SensorData::default();
+        sd.decode_packet(packet_id, &raw)?;
+        Ok(sd)
+    }
+
+    /// Query multiple sensors at once and decode all of them.
+    pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error> {
+        self.send_cmd(&command::encode_query_list(packet_ids))?;
+
+        let expected_len = sensor::expected_data_len(packet_ids)?;
+        let mut buf = vec![0u8; expected_len];
+        self.read_exact(&mut buf)?;
+
+        let mut sd = SensorData::default();
+        sd.decode_packets(packet_ids, &buf)?;
+        Ok(sd)
+    }
+
+    /// Read the robot's current OI mode from sensor data.
+    pub fn read_oi_mode(&mut self) -> Result<OiMode, Error> {
+        let sd = self.query_sensor(35)?;
+        sd.oi_mode
+            .ok_or_else(|| Error::Protocol("missing OI mode".into()))
+    }
+
+    /// Start streaming the given packet IDs.
+    pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error> {
+        self.stream_parser.set_packet_ids(packet_ids);
+        self.send_cmd(&command::encode_stream(packet_ids))
+    }
+
+    /// Pause or resume the sensor stream.
+    pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error> {
+        self.send_cmd(&command::encode_toggle_stream(enable))
+    }
+
+    /// Read bytes from the transport and try to parse stream frames.
+    pub fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error> {
+        let mut buf = [0u8; 256];
+        let n = self.transport.read(&mut buf).map_err(Error::Io)?;
+        if n == 0 {
+            return Ok(Vec::new());
         }
-        Ok(SensorSnapshot::from(raw))
+        let results = self.stream_parser.feed(&buf[..n]);
+        results.into_iter().collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Actuator commands (Safe, Full)
+// ---------------------------------------------------------------------------
+
+impl<M: Actuatable, T: Transport> Robot<M, T> {
+    /// Drive with a given velocity and radius.
+    pub fn drive(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
+        self.send_cmd(&command::encode_drive(
+            velocity.to_mm_per_sec(),
+            radius.to_mm(),
+        ))
     }
 
-    /// Query the actual OI mode reported by the hardware.
-    ///
-    /// This does a sensor read and returns the hardware-reported mode. Use
-    /// this to detect asynchronous mode changes (e.g., bump in Safe mode
-    /// causing a transition to Passive).
-    pub fn actual_mode(&mut self) -> Result<OiMode, Error> {
-        let raw_mode = unsafe { ffi::create_robot_get_mode(self.handle.as_ptr()) };
-        if raw_mode < 0 {
-            return Err(Error::CommandFailed);
-        }
-        Ok(OiMode::from_raw(raw_mode))
+    /// Drive wheels directly with individual velocities.
+    pub fn drive_direct(&mut self, right: Velocity, left: Velocity) -> Result<(), Error> {
+        self.send_cmd(&command::encode_drive_direct(
+            right.to_mm_per_sec(),
+            left.to_mm_per_sec(),
+        ))
     }
 
-    /// Verify that the hardware mode matches this robot's typestate.
-    ///
-    /// Returns `Ok(())` if they match, or `Err(Error::ModeMismatch)` if
-    /// the hardware has autonomously changed modes.
-    pub fn verify_mode(&mut self) -> Result<(), Error> {
-        let actual = self.actual_mode()?;
-        if actual != M::OI_MODE {
-            return Err(Error::ModeMismatch {
-                expected: M::NAME,
-                actual: actual.name(),
-            });
-        }
-        Ok(())
+    /// Drive wheels with PWM values.
+    pub fn drive_pwm(&mut self, right: MotorPower, left: MotorPower) -> Result<(), Error> {
+        self.send_cmd(&command::encode_drive_pwm(right.to_pwm(), left.to_pwm()))
     }
 
-    /// Check if the robot is currently connected.
-    pub fn is_connected(&self) -> bool {
-        unsafe { ffi::create_robot_connected(self.handle.as_ptr()) != 0 }
+    /// Stop all motors (drive 0, 0).
+    pub fn stop(&mut self) -> Result<(), Error> {
+        self.send_cmd(&command::encode_drive(0, 0))
     }
 
+    /// Set LEDs.
+    pub fn set_leds(
+        &mut self,
+        debris: bool,
+        spot: bool,
+        dock: bool,
+        check_robot: bool,
+        color: PowerLedColor,
+        intensity: LedIntensity,
+    ) -> Result<(), Error> {
+        let bits =
+            (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3);
+        self.send_cmd(&command::encode_leds(bits, color.get(), intensity.get()))
+    }
+
+    /// Display ASCII characters on the 7-segment displays.
+    pub fn set_digit_leds(&mut self, d3: u8, d2: u8, d1: u8, d0: u8) -> Result<(), Error> {
+        self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
+    }
+
+    /// Define a song.
+    pub fn define_song(&mut self, number: SongNumber, notes: &[(u8, u8)]) -> Result<(), Error> {
+        let cmd = command::encode_song(number.get(), notes);
+        self.send_cmd(&cmd)
+    }
+
+    /// Play a previously defined song.
+    pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error> {
+        self.send_cmd(&command::encode_play(number.get()))
+    }
+
+    /// Set motor PWM (main brush, side brush, vacuum).
+    pub fn set_motors_pwm(
+        &mut self,
+        main_brush: i8,
+        side_brush: i8,
+        vacuum: i8,
+    ) -> Result<(), Error> {
+        self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Common utilities (all modes)
+// ---------------------------------------------------------------------------
+
+impl<M: Mode, T: Transport> Robot<M, T> {
     /// Get the robot model.
     pub fn model(&self) -> RobotModel {
         self.model
     }
-}
 
-// ---------------------------------------------------------------------------
-// Passive mode — transitions and cleaning
-// ---------------------------------------------------------------------------
-
-impl Robot<Passive> {
-    /// Transition to Safe mode.
-    pub fn into_safe(self) -> Result<Robot<Safe>, TransitionError<Passive>> {
-        self.transition_to::<Safe>()
+    /// Consume the robot and return the underlying transport.
+    pub fn into_transport(self) -> T {
+        self.transport
     }
 
-    /// Transition to Full mode.
-    pub fn into_full(self) -> Result<Robot<Full>, TransitionError<Passive>> {
-        self.transition_to::<Full>()
+    /// Borrow the underlying transport.
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
-    /// Start a cleaning cycle. The robot stays in Passive mode during cleaning.
-    pub fn clean(&mut self, mode: CleanMode) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_clean(self.handle.as_ptr(), mode.to_raw()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
+    /// Borrow the underlying transport mutably.
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
+    /// Send raw bytes to the robot.
+    fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error> {
+        self.transport.write_all(data).map_err(Error::Io)?;
+        self.transport.flush().map_err(Error::Io)?;
+        Ok(())
+    }
+
+    /// Read exactly `buf.len()` bytes from the transport.
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+        let mut offset = 0;
+        while offset < buf.len() {
+            let n = self.transport.read(&mut buf[offset..]).map_err(Error::Io)?;
+            if n == 0 {
+                return Err(Error::InsufficientData {
+                    need: buf.len(),
+                    got: offset,
+                });
+            }
+            offset += n;
         }
         Ok(())
     }
 
-    /// Send the robot to seek its dock.
-    pub fn dock(&self) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_dock(self.handle.as_ptr()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
+    fn sleep_mode_change(&self) {
+        std::thread::sleep(self.model.mode_change_delay());
     }
 
-    /// Disconnect and return to Off mode.
-    pub fn disconnect(self) -> Robot<Off> {
-        let handle = self.handle;
-        let model = self.model;
-        std::mem::forget(self);
-        unsafe {
-            ffi::create_robot_disconnect(handle.as_ptr());
-        }
-        Robot::<Off> {
-            handle,
-            model,
+    /// Transition to a different mode (zero-cost: just changes the type parameter).
+    fn transition<N: Mode>(self) -> Robot<N, T> {
+        Robot {
+            transport: self.transport,
+            model: self.model,
+            stream_parser: self.stream_parser,
             _mode: PhantomData,
-            _not_send_sync: PhantomData,
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Safe mode — transitions
-// ---------------------------------------------------------------------------
-
-impl Robot<Safe> {
-    /// Transition to Passive mode.
-    pub fn into_passive(self) -> Result<Robot<Passive>, TransitionError<Safe>> {
-        self.transition_to::<Passive>()
-    }
-
-    /// Transition to Full mode.
-    pub fn into_full(self) -> Result<Robot<Full>, TransitionError<Safe>> {
-        self.transition_to::<Full>()
-    }
-
-    /// Disconnect and return to Off mode.
-    pub fn disconnect(self) -> Robot<Off> {
-        let handle = self.handle;
-        let model = self.model;
-        std::mem::forget(self);
-        unsafe {
-            ffi::create_robot_disconnect(handle.as_ptr());
-        }
-        Robot::<Off> {
-            handle,
-            model,
-            _mode: PhantomData,
-            _not_send_sync: PhantomData,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Full mode — transitions
-// ---------------------------------------------------------------------------
-
-impl Robot<Full> {
-    /// Transition to Passive mode.
-    pub fn into_passive(self) -> Result<Robot<Passive>, TransitionError<Full>> {
-        self.transition_to::<Passive>()
-    }
-
-    /// Transition to Safe mode.
-    pub fn into_safe(self) -> Result<Robot<Safe>, TransitionError<Full>> {
-        self.transition_to::<Safe>()
-    }
-
-    /// Disconnect and return to Off mode.
-    pub fn disconnect(self) -> Robot<Off> {
-        let handle = self.handle;
-        let model = self.model;
-        std::mem::forget(self);
-        unsafe {
-            ffi::create_robot_disconnect(handle.as_ptr());
-        }
-        Robot::<Off> {
-            handle,
-            model,
-            _mode: PhantomData,
-            _not_send_sync: PhantomData,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Actuator commands — only available in Safe or Full modes
-// ---------------------------------------------------------------------------
-
-impl<M: Actuatable> Robot<M> {
-    /// Drive with linear velocity and angular velocity.
-    pub fn drive(&mut self, velocity: Velocity, angular: AngularVelocity) -> Result<(), Error> {
-        let rc =
-            unsafe { ffi::create_robot_drive(self.handle.as_ptr(), velocity.get(), angular.get()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Drive along an arc with the given velocity and turning radius.
-    pub fn drive_radius(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_drive_radius(self.handle.as_ptr(), velocity.get(), radius.get())
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set individual wheel velocities.
-    pub fn drive_wheels(&mut self, left: Velocity, right: Velocity) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_drive_wheels(self.handle.as_ptr(), left.get(), right.get())
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set individual wheel velocities using PWM.
-    pub fn drive_wheels_pwm(&mut self, left: MotorPower, right: MotorPower) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_drive_wheels_pwm(self.handle.as_ptr(), left.get(), right.get())
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Stop all wheel motion.
-    pub fn stop(&mut self) -> Result<(), Error> {
-        self.drive(Velocity::ZERO, AngularVelocity::ZERO)
-    }
-
-    /// Set the side brush motor power.
-    pub fn set_side_motor(&mut self, power: MotorPower) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_set_side_motor(self.handle.as_ptr(), power.get()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set the main brush motor power.
-    pub fn set_main_motor(&mut self, power: MotorPower) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_set_main_motor(self.handle.as_ptr(), power.get()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set the vacuum motor power.
-    pub fn set_vacuum_motor(&mut self, power: MotorPower) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_set_vacuum_motor(self.handle.as_ptr(), power.get()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set all three motor powers at once.
-    pub fn set_all_motors(
-        &mut self,
-        main: MotorPower,
-        side: MotorPower,
-        vacuum: MotorPower,
-    ) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_set_all_motors(
-                self.handle.as_ptr(),
-                main.get(),
-                side.get(),
-                vacuum.get(),
-            )
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Enable or disable the debris LED.
-    pub fn set_debris_led(&mut self, enable: bool) -> Result<(), Error> {
-        let rc =
-            unsafe { ffi::create_robot_enable_debris_led(self.handle.as_ptr(), u8::from(enable)) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Enable or disable the spot LED.
-    pub fn set_spot_led(&mut self, enable: bool) -> Result<(), Error> {
-        let rc =
-            unsafe { ffi::create_robot_enable_spot_led(self.handle.as_ptr(), u8::from(enable)) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Enable or disable the dock LED.
-    pub fn set_dock_led(&mut self, enable: bool) -> Result<(), Error> {
-        let rc =
-            unsafe { ffi::create_robot_enable_dock_led(self.handle.as_ptr(), u8::from(enable)) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Enable or disable the "check robot" LED.
-    pub fn set_check_robot_led(&mut self, enable: bool) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_enable_check_robot_led(self.handle.as_ptr(), u8::from(enable))
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set the power LED color and intensity.
-    pub fn set_power_led(
-        &mut self,
-        color: PowerLedColor,
-        intensity: LedIntensity,
-    ) -> Result<(), Error> {
-        let rc = unsafe {
-            ffi::create_robot_set_power_led(self.handle.as_ptr(), color.get(), intensity.get())
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Display four ASCII characters on the 7-segment display (Create 2).
-    pub fn set_digits_ascii(&self, d1: u8, d2: u8, d3: u8, d4: u8) -> Result<(), Error> {
-        let rc =
-            unsafe { ffi::create_robot_set_digits_ascii(self.handle.as_ptr(), d1, d2, d3, d4) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Define a song in a song slot.
-    ///
-    /// `notes` and `durations` must have the same length (max 16).
-    pub fn define_song(
-        &self,
-        number: SongNumber,
-        notes: &[u8],
-        durations: &[f32],
-    ) -> Result<(), Error> {
-        if notes.len() != durations.len() || notes.len() > 16 {
-            return Err(Error::CommandFailed);
-        }
-        let rc = unsafe {
-            ffi::create_robot_define_song(
-                self.handle.as_ptr(),
-                number.get(),
-                notes.len() as u8,
-                notes.as_ptr(),
-                durations.as_ptr(),
-            )
-        };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Play a previously defined song.
-    pub fn play_song(&self, number: SongNumber) -> Result<(), Error> {
-        let rc = unsafe { ffi::create_robot_play_song(self.handle.as_ptr(), number.get()) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-
-    /// Set the robot's internal clock.
-    pub fn set_date(&self, day: DayOfWeek, hour: u8, minute: u8) -> Result<(), Error> {
-        if hour > 23 || minute > 59 {
-            return Err(Error::OutOfRange {
-                value: if hour > 23 {
-                    hour as f32
-                } else {
-                    minute as f32
-                },
-                min: 0.0,
-                max: if hour > 23 { 23.0 } else { 59.0 },
-            });
-        }
-        let rc =
-            unsafe { ffi::create_robot_set_date(self.handle.as_ptr(), day.to_raw(), hour, minute) };
-        if rc != ffi::CREATE_OK {
-            return Err(Error::CommandFailed);
-        }
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
-impl<M: Mode> Robot<M> {
-    /// Generic mode transition. Sends the FFI set_mode command and transmutes.
-    fn transition_to<Target: Mode>(self) -> Result<Robot<Target>, TransitionError<M>> {
-        let handle = self.handle;
-        let model = self.model;
-        std::mem::forget(self);
-
-        let rc = unsafe { ffi::create_robot_set_mode(handle.as_ptr(), Target::RAW) };
-
-        if rc != ffi::CREATE_OK {
-            // Reconstruct original mode for recovery.
-            let robot = Robot::<M> {
-                handle,
-                model,
-                _mode: PhantomData,
-                _not_send_sync: PhantomData,
-            };
-            return Err(TransitionError {
-                error: Error::CommandFailed,
-                robot,
-            });
-        }
-
-        Ok(Robot::<Target> {
-            handle,
-            model,
-            _mode: PhantomData,
-            _not_send_sync: PhantomData,
-        })
     }
 }

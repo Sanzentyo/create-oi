@@ -1,14 +1,37 @@
-[workspace]
-members = [".", "libcreate-sys"]
-
 [package]
 name = "libcreate"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Safe, idiomatic Rust wrapper for libcreate (iRobot Create 1/2 and Roomba)"
-license = "BSD-3-Clause"
+description = "Pure Rust implementation of the iRobot Create/Roomba Open Interface protocol"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Sanzentyo/libcreate-rs"
+keywords = ["irobot", "create", "roomba", "robot", "serial"]
+categories = ["hardware-support", "embedded"]
 
 [dependencies]
-libcreate-sys = { path = "libcreate-sys" }
 thiserror = "2"
-static_assertions = "1"
+
+# Sync serial transport
+serialport = { version = "4.9", optional = true }
+
+# Tokio async transport
+tokio = { version = "1", features = ["io-util", "time", "rt"], optional = true }
+tokio-serial = { version = "5.4", optional = true }
+
+# Smol async transport
+smol = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
+
+# Shared async traits
+futures-io = { version = "0.3", optional = true }
+
+[features]
+default = ["serial"]
+serial = ["dep:serialport"]
+tokio-runtime = ["dep:tokio", "dep:tokio-serial", "dep:futures-io"]
+smol-runtime = ["dep:smol", "dep:async-io", "dep:futures-io", "serial"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+smol = "2"
+serialport = "4.9"

@@ -1,59 +1,51 @@
-//! # libcreate — Safe Rust wrapper for the iRobot Create / Roomba
+//! # libcreate
 //!
-//! This crate provides an idiomatic, type-safe Rust API for controlling
-//! iRobot Create 1, Create 2, and compatible Roomba robots over a serial
-//! connection.
+//! A pure Rust implementation of the iRobot Create / Roomba
+//! [Open Interface (OI)](https://www.irobot.com/about-irobot/stem/create-2)
+//! protocol.
 //!
-//! ## TypeState Pattern
+//! ## Design
 //!
-//! The robot's Open Interface (OI) modes are encoded at the type level:
-//!
-//! - [`Robot<Off>`](robot::Robot) — not connected
-//! - [`Robot<Passive>`](robot::Robot) — connected, sensors only
-//! - [`Robot<Safe>`](robot::Robot) — actuator control with safety limits
-//! - [`Robot<Full>`](robot::Robot) — actuator control, no safety limits
-//!
-//! Mode transitions consume `self`, making it impossible to use commands
-//! that are invalid for the current mode.
+//! - **Sans-IO**: Protocol encoding and decoding are completely independent
+//!   of any I/O runtime. The [`protocol`] module works on plain `&[u8]`
+//!   slices — zero allocation, zero copy.
+//! - **TypeState**: The [`Robot`](robot::Robot) type encodes the OI mode
+//!   (`Off`, `Passive`, `Safe`, `Full`) as a type parameter so the compiler
+//!   prevents calling actuator commands while in Passive mode, etc.
+//! - **Feature-gated transports**: Choose your I/O backend via Cargo features:
+//!   - `serial` (default) — synchronous serial via [`serialport`](https://crates.io/crates/serialport)
+//!   - `tokio-runtime` — async via [`tokio-serial`](https://crates.io/crates/tokio-serial)
+//!   - `smol-runtime` — async via [`smol`](https://crates.io/crates/smol) + `async-io`
 //!
 //! ## Quick Start
 //!
-//! ```no_run
-//! use libcreate::{Robot, RobotModel};
+//! ```rust,no_run
+//! use libcreate::prelude::*;
+//! use libcreate::io::serial::SerialTransport;
+//! use libcreate::types::RobotModel;
 //!
-//! // Create a handle and connect
-//! let robot = Robot::new(RobotModel::Create2)?;
-//! let robot = robot.connect("/dev/ttyUSB0", 115200)?;
-//!
-//! // Enter Safe mode for actuator control
-//! let mut robot = robot.into_safe()?;
-//!
-//! // Read sensors
-//! let snapshot = robot.sensors()?;
-//! println!("Battery: {:.0}%", snapshot.battery.charge_ratio() * 100.0);
-//!
-//! // Drive forward
-//! robot.drive(0.2.try_into()?, 0.0.try_into()?)?;
-//!
-//! // Stop and disconnect
-//! robot.stop()?;
-//! let robot = robot.into_passive()?;
-//! let _robot = robot.disconnect();
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! let transport = SerialTransport::open("/dev/ttyUSB0", RobotModel::Create2).unwrap();
+//! let robot = Robot::new(transport, RobotModel::Create2);
+//! let robot = robot.start().unwrap();         // Off → Passive
+//! let robot = robot.to_safe().unwrap();       // Passive → Safe
+//! // robot.drive(Velocity::new(0.1).unwrap(), Radius::STRAIGHT).unwrap();
 //! ```
 
 pub mod error;
+pub mod io;
 pub mod mode;
+pub mod protocol;
 pub mod robot;
-pub mod sensor;
+pub mod transport;
 pub mod types;
 
-// Re-export the most commonly used items at crate root.
-pub use error::{Error, TransitionError};
-pub use mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
-pub use robot::Robot;
-pub use sensor::SensorSnapshot;
-pub use types::{
-    AngularVelocity, ChargingState, CleanMode, DayOfWeek, IrChar, LedIntensity, MotorPower, OiMode,
-    PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
-};
+/// Convenient re-exports for common usage.
+pub mod prelude {
+    pub use crate::error::{ConnectError, Error, TransitionError};
+    pub use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
+    pub use crate::robot::Robot;
+    pub use crate::transport::Transport;
+    pub use crate::types::{
+        LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
+    };
+}
