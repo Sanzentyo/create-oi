@@ -17,7 +17,7 @@ pub enum OiMode {
 }
 
 impl OiMode {
-    pub fn from_raw(v: u8) -> Self {
+    pub const fn from_raw(v: u8) -> Self {
         match v {
             0 => Self::Off,
             1 => Self::Passive,
@@ -27,7 +27,7 @@ impl OiMode {
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Off => "Off",
             Self::Passive => "Passive",
@@ -55,7 +55,7 @@ pub enum ChargingState {
 }
 
 impl ChargingState {
-    pub fn from_raw(v: u8) -> Self {
+    pub const fn from_raw(v: u8) -> Self {
         match v {
             0 => Self::NotCharging,
             1 => Self::ReconditioningCharging,
@@ -97,7 +97,7 @@ pub enum DayOfWeek {
 }
 
 impl DayOfWeek {
-    pub fn to_raw(self) -> u8 {
+    pub const fn to_raw(self) -> u8 {
         self as u8
     }
 }

@@ -14,77 +14,77 @@ use crate::error::ProtocolError;
 use crate::opcode::Opcode;
 
 /// Start the OI. Transitions to Passive mode.
-pub fn encode_start() -> [u8; 1] {
+pub const fn encode_start() -> [u8; 1] {
     [Opcode::Start as u8]
 }
 
 /// Reset the robot.
-pub fn encode_reset() -> [u8; 1] {
+pub const fn encode_reset() -> [u8; 1] {
     [Opcode::Reset as u8]
 }
 
 /// Stop the OI. Transitions to Off mode.
-pub fn encode_stop() -> [u8; 1] {
+pub const fn encode_stop() -> [u8; 1] {
     [Opcode::Stop as u8]
 }
 
 /// Enter Safe mode.
-pub fn encode_safe() -> [u8; 1] {
+pub const fn encode_safe() -> [u8; 1] {
     [Opcode::Safe as u8]
 }
 
 /// Enter Full mode.
-pub fn encode_full() -> [u8; 1] {
+pub const fn encode_full() -> [u8; 1] {
     [Opcode::Full as u8]
 }
 
 /// Enter Control mode (same as Safe for Create 2).
-pub fn encode_control() -> [u8; 1] {
+pub const fn encode_control() -> [u8; 1] {
     [Opcode::Control as u8]
 }
 
 /// Power down the robot.
-pub fn encode_power() -> [u8; 1] {
+pub const fn encode_power() -> [u8; 1] {
     [Opcode::Power as u8]
 }
 
 /// Start default cleaning.
-pub fn encode_clean() -> [u8; 1] {
+pub const fn encode_clean() -> [u8; 1] {
     [Opcode::Clean as u8]
 }
 
 /// Start max cleaning.
-pub fn encode_max() -> [u8; 1] {
+pub const fn encode_max() -> [u8; 1] {
     [Opcode::Max as u8]
 }
 
 /// Start spot cleaning.
-pub fn encode_spot() -> [u8; 1] {
+pub const fn encode_spot() -> [u8; 1] {
     [Opcode::Spot as u8]
 }
 
 /// Seek dock.
-pub fn encode_dock() -> [u8; 1] {
+pub const fn encode_dock() -> [u8; 1] {
     [Opcode::Dock as u8]
 }
 
 /// Drive with velocity (mm/s) and radius (mm).
 /// Both values are signed 16-bit big-endian.
-pub fn encode_drive(velocity_mm: i16, radius_mm: i16) -> [u8; 5] {
+pub const fn encode_drive(velocity_mm: i16, radius_mm: i16) -> [u8; 5] {
     let v = velocity_mm.to_be_bytes();
     let r = radius_mm.to_be_bytes();
     [Opcode::Drive as u8, v[0], v[1], r[0], r[1]]
 }
 
 /// Drive wheels directly with individual velocities (mm/s).
-pub fn encode_drive_direct(right_mm: i16, left_mm: i16) -> [u8; 5] {
+pub const fn encode_drive_direct(right_mm: i16, left_mm: i16) -> [u8; 5] {
     let r = right_mm.to_be_bytes();
     let l = left_mm.to_be_bytes();
     [Opcode::DriveDirect as u8, r[0], r[1], l[0], l[1]]
 }
 
 /// Drive wheels with PWM values (-255 to 255).
-pub fn encode_drive_pwm(right_pwm: i16, left_pwm: i16) -> [u8; 5] {
+pub const fn encode_drive_pwm(right_pwm: i16, left_pwm: i16) -> [u8; 5] {
     let r = right_pwm.to_be_bytes();
     let l = left_pwm.to_be_bytes();
     [Opcode::DrivePwm as u8, r[0], r[1], l[0], l[1]]
@@ -93,13 +93,13 @@ pub fn encode_drive_pwm(right_pwm: i16, left_pwm: i16) -> [u8; 5] {
 /// Set motor states (side brush, main brush, vacuum).
 /// Bit 0: side brush, Bit 1: vacuum, Bit 2: main brush.
 /// Bits 3,4: side/main brush direction (1 = default, 0 = reverse).
-pub fn encode_motors(bits: u8) -> [u8; 2] {
+pub const fn encode_motors(bits: u8) -> [u8; 2] {
     [Opcode::Motors as u8, bits]
 }
 
 /// Set motor PWM values: main brush, side brush, vacuum.
 /// Each is a signed byte (-127 to 127).
-pub fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: i8) -> [u8; 4] {
+pub const fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: i8) -> [u8; 4] {
     [
         Opcode::MotorsPwm as u8,
         main_brush as u8,
@@ -112,12 +112,12 @@ pub fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: i8) -> [u8; 4] 
 /// `led_bits`: Bit 0=debris, 1=spot, 2=dock, 3=check_robot
 /// `power_color`: 0=green, 255=red
 /// `power_intensity`: 0=off, 255=full
-pub fn encode_leds(led_bits: u8, power_color: u8, power_intensity: u8) -> [u8; 4] {
+pub const fn encode_leds(led_bits: u8, power_color: u8, power_intensity: u8) -> [u8; 4] {
     [Opcode::Leds as u8, led_bits, power_color, power_intensity]
 }
 
 /// Set the 7-segment displays with ASCII characters.
-pub fn encode_digit_leds_ascii(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
+pub const fn encode_digit_leds_ascii(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
     [Opcode::DigitLedsAscii as u8, d3, d2, d1, d0]
 }
 
@@ -125,7 +125,7 @@ pub fn encode_digit_leds_ascii(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
 ///
 /// `day_leds`: bits 0–6 select the Sun–Sat day LEDs.
 /// `schedule_leds`: bit 0=colon, bit 1=AM/PM indicator, bit 2=clock icon, bit 3=schedule icon.
-pub fn encode_scheduling_leds(day_leds: u8, schedule_leds: u8) -> [u8; 3] {
+pub const fn encode_scheduling_leds(day_leds: u8, schedule_leds: u8) -> [u8; 3] {
     [Opcode::SchedulingLeds as u8, day_leds, schedule_leds]
 }
 
@@ -134,7 +134,7 @@ pub fn encode_scheduling_leds(day_leds: u8, schedule_leds: u8) -> [u8; 3] {
 /// Each argument directly controls the 7 segments and decimal point of one digit:
 /// bits 0–6 = segments A–G, bit 7 = decimal point.
 /// `d3` is the leftmost digit and `d0` is the rightmost.
-pub fn encode_digit_leds_raw(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
+pub const fn encode_digit_leds_raw(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
     [Opcode::DigitLedsRaw as u8, d3, d2, d1, d0]
 }
 
@@ -142,7 +142,7 @@ pub fn encode_digit_leds_raw(d3: u8, d2: u8, d1: u8, d0: u8) -> [u8; 5] {
 ///
 /// Bits: 0=clean, 1=spot, 2=dock, 3=minute, 4=hour, 5=day, 6=schedule, 7=clock.
 /// Setting a bit to 1 simulates pressing that button.
-pub fn encode_buttons(bits: u8) -> [u8; 2] {
+pub const fn encode_buttons(bits: u8) -> [u8; 2] {
     [Opcode::Buttons as u8, bits]
 }
 
@@ -152,13 +152,15 @@ pub fn encode_buttons(bits: u8) -> [u8; 2] {
 /// `times`: (hour, minute) for each day of the week, starting with Sunday.
 ///
 /// Note: firmware support for this command varies across robot models.
-pub fn encode_schedule(days: u8, times: [(u8, u8); 7]) -> [u8; 16] {
+pub const fn encode_schedule(days: u8, times: [(u8, u8); 7]) -> [u8; 16] {
     let mut buf = [0u8; 16];
     buf[0] = Opcode::Schedule as u8;
     buf[1] = days;
-    for (i, (hour, minute)) in times.iter().enumerate() {
-        buf[2 + i * 2] = *hour;
-        buf[2 + i * 2 + 1] = *minute;
+    let mut i = 0;
+    while i < 7 {
+        buf[2 + i * 2] = times[i].0;
+        buf[2 + i * 2 + 1] = times[i].1;
+        i += 1;
     }
     buf
 }
@@ -209,12 +211,12 @@ pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Vec<u8> {
 }
 
 /// Play a previously defined song.
-pub fn encode_play(song_number: u8) -> [u8; 2] {
+pub const fn encode_play(song_number: u8) -> [u8; 2] {
     [Opcode::Play as u8, song_number]
 }
 
 /// Request a single sensor packet.
-pub fn encode_sensors(packet_id: u8) -> [u8; 2] {
+pub const fn encode_sensors(packet_id: u8) -> [u8; 2] {
     [Opcode::Sensors as u8, packet_id]
 }
 
@@ -273,17 +275,17 @@ pub fn encode_stream(packet_ids: &[u8]) -> Vec<u8> {
 }
 
 /// Pause or resume the sensor stream.
-pub fn encode_toggle_stream(enable: bool) -> [u8; 2] {
+pub const fn encode_toggle_stream(enable: bool) -> [u8; 2] {
     [Opcode::ToggleStream as u8, if enable { 1 } else { 0 }]
 }
 
 /// Set the date/time.
-pub fn encode_date(day: u8, hour: u8, minute: u8) -> [u8; 4] {
+pub const fn encode_date(day: u8, hour: u8, minute: u8) -> [u8; 4] {
     [Opcode::Date as u8, day, hour, minute]
 }
 
 /// Change baud rate.
-pub fn encode_baud(baud_code: u8) -> [u8; 2] {
+pub const fn encode_baud(baud_code: u8) -> [u8; 2] {
     [Opcode::Baud as u8, baud_code]
 }
 
