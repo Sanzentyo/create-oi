@@ -1,0 +1,14 @@
+[workspace]
+members = [".", "libcreate-sys"]
+
+[package]
+name = "libcreate"
+version = "0.1.0"
+edition = "2024"
+description = "Safe, idiomatic Rust wrapper for libcreate (iRobot Create 1/2 and Roomba)"
+license = "BSD-3-Clause"
+
+[dependencies]
+libcreate-sys = { path = "libcreate-sys" }
+thiserror = "2"
+static_assertions = "1"

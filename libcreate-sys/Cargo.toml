@@ -1,0 +1,10 @@
+[package]
+name = "libcreate-sys"
+version = "0.1.0"
+edition = "2024"
+description = "Raw FFI bindings to libcreate (iRobot Create C++ library)"
+license = "BSD-3-Clause"
+links = "create"
+
+[build-dependencies]
+cc = "1"
