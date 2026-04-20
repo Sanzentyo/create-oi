@@ -29,6 +29,13 @@ pub trait Transport: std::fmt::Debug + Send {
 /// Asynchronous transport for communicating with the robot.
 ///
 /// Requires the `tokio-runtime` or `smol-runtime` feature.
+///
+/// # Cancellation safety
+///
+/// Async methods on this trait are **not** guaranteed to be cancellation-safe.
+/// If a future returned by `write_all` or `read` is dropped mid-execution,
+/// the transport may be left in an inconsistent state. Callers should avoid
+/// dropping these futures unless they intend to discard the transport.
 #[cfg(any(feature = "tokio-runtime", feature = "smol-runtime"))]
 #[allow(async_fn_in_trait)]
 pub trait AsyncTransport: std::fmt::Debug + Send {
@@ -43,4 +50,11 @@ pub trait AsyncTransport: std::fmt::Debug + Send {
 
     /// Close the transport.
     async fn close(&mut self) -> io::Result<()>;
+
+    /// Sleep for the given duration using the runtime's timer.
+    ///
+    /// This abstracts over `tokio::time::sleep` / `smol::Timer::after`
+    /// so that protocol-level delays (e.g. mode-change waits) don't
+    /// depend on a specific async runtime.
+    async fn sleep(&self, duration: Duration);
 }

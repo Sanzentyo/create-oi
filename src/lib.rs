@@ -39,6 +39,9 @@ pub mod robot;
 pub mod transport;
 pub mod types;
 
+#[cfg(any(feature = "tokio-runtime", feature = "smol-runtime"))]
+pub mod async_robot;
+
 /// Convenient re-exports for common usage.
 pub mod prelude {
     pub use crate::error::{ConnectError, Error, TransitionError};
@@ -48,4 +51,10 @@ pub mod prelude {
     pub use crate::types::{
         LedIntensity, MotorPower, OiMode, PowerLedColor, Radius, RobotModel, SongNumber, Velocity,
     };
+
+    #[cfg(any(feature = "tokio-runtime", feature = "smol-runtime"))]
+    pub use crate::async_robot::AsyncRobot;
+
+    #[cfg(any(feature = "tokio-runtime", feature = "smol-runtime"))]
+    pub use crate::transport::AsyncTransport;
 }

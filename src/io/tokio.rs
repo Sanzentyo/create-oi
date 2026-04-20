@@ -26,22 +26,22 @@ impl TokioTransport {
 
 impl AsyncTransport for TokioTransport {
     async fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
-        use tokio::io::AsyncWriteExt;
         tokio::io::AsyncWriteExt::write_all(&mut self.port, data).await
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        use tokio::io::AsyncReadExt;
         tokio::io::AsyncReadExt::read(&mut self.port, buf).await
     }
 
     async fn flush(&mut self) -> io::Result<()> {
-        use tokio::io::AsyncWriteExt;
         tokio::io::AsyncWriteExt::flush(&mut self.port).await
     }
 
     async fn close(&mut self) -> io::Result<()> {
-        use tokio::io::AsyncWriteExt;
         tokio::io::AsyncWriteExt::shutdown(&mut self.port).await
+    }
+
+    async fn sleep(&self, duration: std::time::Duration) {
+        tokio::time::sleep(duration).await;
     }
 }

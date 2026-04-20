@@ -32,6 +32,7 @@ src/
 │   └── stream.rs           # Stream framing state machine (feed(&[u8]))
 ├── transport.rs            # Transport + AsyncTransport trait definitions
 ├── robot.rs                # Robot<M, T: Transport> — sync API
+├── async_robot.rs          # AsyncRobot<M, T: AsyncTransport> — async API
 ├── io.rs                   # Concrete transport module root
 └── io/
     ├── serial.rs           # SerialTransport (feature = "serial")
@@ -41,7 +42,8 @@ src/
 
 ## TypeState Pattern
 
-The robot's OI mode is encoded in the type system:
+The robot's OI mode is encoded in the type system. Both `Robot<M, T>` (sync)
+and `AsyncRobot<M, T>` (async) share the same TypeState model:
 
 ```
 Robot<Off, T> ─start()→ Robot<Passive, T> ─to_safe()→ Robot<Safe, T>
