@@ -1,8 +1,8 @@
-# libcreate-rs Architecture
+# create-oi Architecture
 
 ## Overview
 
-`libcreate-rs` is a **pure Rust** implementation of the iRobot Create / Roomba
+`create-oi` is a **pure Rust** implementation of the iRobot Create / Roomba
 [Open Interface (OI)](https://www.irobot.com/about-irobot/stem/create-2) protocol.
 It supports Create 1, Create 2, and compatible Roomba robots over serial.
 

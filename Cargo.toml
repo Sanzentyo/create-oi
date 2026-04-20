@@ -18,7 +18,7 @@ default-members = [
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Sanzentyo/libcreate-rs"
+repository = "https://github.com/Sanzentyo/create-oi"
 rust-version = "1.85"
 
 [workspace.dependencies]
