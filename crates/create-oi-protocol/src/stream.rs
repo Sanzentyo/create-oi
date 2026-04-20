@@ -87,11 +87,14 @@ impl<const N: usize> StreamParser<N> {
                     }
                 }
                 State::WaitingLength => {
-                    self.push_byte(byte);
                     let nbytes = byte as usize;
-                    if nbytes == 0 || nbytes > N.saturating_sub(2) {
+                    // A full frame is: header(1) + nbytes_byte(1) + nbytes payload + checksum(1)
+                    // = nbytes + 3 bytes total, so we need nbytes + 3 <= N.
+                    if nbytes == 0 || nbytes > N.saturating_sub(3) {
+                        // Oversized or empty frame — discard and resync.
                         self.state = State::WaitingHeader;
                     } else {
+                        self.push_byte(byte);
                         self.state = State::Collecting {
                             expected: nbytes + 1,
                         };
@@ -130,11 +133,13 @@ impl<const N: usize> StreamParser<N> {
     fn parse_frame(&self) -> Result<SensorData, ProtocolError> {
         let frame = &self.buf[..self.len];
 
-        // Verify checksum: sum of all bytes (including header) mod 256 == 0
-        let checksum: u8 = frame.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
-        if checksum != 0 {
-            let expected = frame[self.len - 1];
-            let actual = expected.wrapping_sub(checksum).wrapping_add(expected);
+        // Verify checksum: sum of all bytes (including header) mod 256 == 0.
+        let fold: u8 = frame.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        if fold != 0 {
+            // The checksum byte that was received.
+            let actual = frame[self.len - 1];
+            // The checksum byte that would make the sum zero.
+            let expected = actual.wrapping_sub(fold);
             return Err(ProtocolError::Checksum { expected, actual });
         }
 
@@ -248,15 +253,42 @@ mod tests {
     }
 
     #[test]
-    fn bad_checksum_returns_error() {
+    fn bad_checksum_returns_error_with_correct_bytes() {
         let mut parser = StreamParser::<256>::new();
         let payload = [8, 1];
         let mut frame = make_frame(&payload);
-        *frame.last_mut().unwrap() = frame.last().unwrap().wrapping_add(1);
+        // Corrupt checksum by +1
+        let orig_cs = *frame.last().unwrap();
+        *frame.last_mut().unwrap() = orig_cs.wrapping_add(1);
 
         let results = parser.feed(&frame);
         assert_eq!(results.len(), 1);
-        assert!(results[0].is_err());
+        let err = results[0].as_ref().unwrap_err();
+        if let crate::error::ProtocolError::Checksum { expected, actual } = *err {
+            // actual = received (corrupted) byte
+            assert_eq!(actual, orig_cs.wrapping_add(1));
+            // expected = the byte that would have made the sum zero
+            assert_eq!(expected, orig_cs);
+        } else {
+            panic!("expected Checksum error, got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn oversized_frame_is_rejected_and_next_frame_parses() {
+        // Use a tiny buffer (size 8) to exercise the overflow guard.
+        // Buffer holds 8 bytes; a frame needs nbytes+3, so max nbytes = 5.
+        // Feed nbytes=6 (too large) followed by a valid frame.
+        let mut parser = StreamParser::<8>::new();
+        let valid_frame = make_frame(&[8, 1]); // nbytes=2, fits in 8
+
+        // An oversized "frame": [19][6][...] — 6 > 8-3=5, should be rejected.
+        let mut data = vec![STREAM_HEADER, 6, 0, 0, 0, 0, 0, 0, 0];
+        data.extend_from_slice(&valid_frame);
+
+        let results = parser.feed(&data);
+        assert_eq!(results.len(), 1, "only the valid frame should be parsed");
+        assert!(results[0].is_ok());
     }
 
     #[test]

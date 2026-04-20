@@ -22,7 +22,7 @@
 - [x] create-oi-dora: dora-rs dataflow integration crate + example
 - [x] Mock transport tests: 14 sync + 13 async integration tests
 - [x] Unit tests: 94 tests across all crates
-- [x] Examples: basic_sync, basic_tokio, dora_create_driver
+- [x] Examples: basic_sync, basic_tokio, dora_create_driver, basic_smol, round_smol
 - [x] Justfile: workspace commands
 - [x] Architecture docs: updated for no_std layered structure
 - [x] User-input docs: ID-date naming convention
@@ -41,6 +41,15 @@
   - `sensor.rs`: `decode_u8/i8/u16/i16`, `expected_data_len`, all 20 `SensorData::is_*` bit-field accessors
   - `protocol/types.rs`: `OiMode::from_raw/name`, `ChargingState::from_raw`, `DayOfWeek::to_raw`, `IrChar::from_raw`
   - `create-oi/types.rs`: `CreateRobotModel` 7 methods, all getters, `PowerLedColor/LedIntensity/SongNumber`, `MotorBits/ButtonBits::to_raw`
+- [x] **Exploratory refactoring** (dual-agent cross-check: explore + rubber-duck):
+  - **Bug fix**: StreamParser overflow guard `N-2` → `N-3`; oversized frames now correctly rejected + resync
+  - **Bug fix**: Checksum error `expected`/`actual` were swapped and formula wrong; now correctly reports received vs correct byte
+  - **Soundness**: Capability traits (`SensorReadable`, `Actuatable`, `FullControl`) now properly sealed via private `cap_sealed` module; external code cannot bypass TypeState by implementing traits for wrong modes
+  - **Cleanup**: Removed dead `Error<E>` variants (`ModeMismatch`, `Connection`, `NotConnected`) — never constructed
+  - **Docs**: `transport_mut()` now has explicit caution warning in both `Create` and `AsyncCreate`
+  - **API**: `ChargingState::name()` and `IrChar::name()` added (consistent with `OiMode::name()`)
+  - **API**: `From<PowerLedColor> for u8`, `From<LedIntensity> for u8`, `From<SongNumber> for u8` added
+  - **Examples**: `create-oi-smol` now has `basic_smol` and `round_smol` examples
 
 ### no_std Feature Hierarchy
 - `std` (default) → implies `alloc` + `create-oi-protocol/std`

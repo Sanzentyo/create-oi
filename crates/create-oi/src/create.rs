@@ -482,6 +482,13 @@ impl<M: Mode, T: Transport> Create<M, T> {
     }
 
     /// Borrow the underlying transport mutably.
+    ///
+    /// # Caution
+    ///
+    /// Directly writing to or reading from the transport bypasses both the
+    /// TypeState mode invariants and the internal [`StreamParser`] state.
+    /// Only use this for low-level diagnostics or protocol extensions where
+    /// you can guarantee correctness externally.
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }

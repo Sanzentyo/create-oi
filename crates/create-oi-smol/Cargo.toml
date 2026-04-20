@@ -14,3 +14,11 @@ publish = false  # stub — not ready for crates.io
 create-oi = { workspace = true, features = ["std"] }
 smol.workspace = true
 serialport.workspace = true
+
+[[example]]
+name = "basic_smol"
+required-features = []
+
+[[example]]
+name = "round_smol"
+required-features = []

@@ -69,6 +69,19 @@ impl ChargingState {
             x => Self::Unknown(x),
         }
     }
+
+    #[inline(always)]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NotCharging => "NotCharging",
+            Self::ReconditioningCharging => "ReconditioningCharging",
+            Self::FullCharging => "FullCharging",
+            Self::TrickleCharging => "TrickleCharging",
+            Self::Waiting => "Waiting",
+            Self::ChargingFaultCondition => "ChargingFaultCondition",
+            Self::Unknown(_) => "Unknown",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +168,30 @@ impl IrChar {
             169 => Self::BuoyRedAndForceField,
             173 => Self::BuoyGreenRedAndForceField,
             x => Self::Unknown(x),
+        }
+    }
+
+    #[inline(always)]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Left => "Left",
+            Self::ForwardLeft => "ForwardLeft",
+            Self::CenterLeft => "CenterLeft",
+            Self::CenterRight => "CenterRight",
+            Self::ForwardRight => "ForwardRight",
+            Self::Right => "Right",
+            Self::SeekDock => "SeekDock",
+            Self::ReservedGreen => "ReservedGreen",
+            Self::ForceField => "ForceField",
+            Self::ReservedRed => "ReservedRed",
+            Self::BuoyGreen => "BuoyGreen",
+            Self::BuoyRed => "BuoyRed",
+            Self::BuoyGreenAndRed => "BuoyGreenAndRed",
+            Self::BuoyGreenAndForceField => "BuoyGreenAndForceField",
+            Self::BuoyRedAndForceField => "BuoyRedAndForceField",
+            Self::BuoyGreenRedAndForceField => "BuoyGreenRedAndForceField",
+            Self::Unknown(_) => "Unknown",
         }
     }
 }

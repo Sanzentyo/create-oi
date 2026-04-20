@@ -329,6 +329,13 @@ impl From<u8> for PowerLedColor {
     }
 }
 
+impl From<PowerLedColor> for u8 {
+    #[inline(always)]
+    fn from(c: PowerLedColor) -> u8 {
+        c.0
+    }
+}
+
 /// LED intensity (0 = off, 255 = full brightness).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedIntensity(u8);
@@ -352,6 +359,13 @@ impl From<u8> for LedIntensity {
     #[inline(always)]
     fn from(v: u8) -> Self {
         Self(v)
+    }
+}
+
+impl From<LedIntensity> for u8 {
+    #[inline(always)]
+    fn from(i: LedIntensity) -> u8 {
+        i.0
     }
 }
 
@@ -380,6 +394,13 @@ impl TryFrom<u8> for SongNumber {
     type Error = ValidationError;
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         Self::new(v)
+    }
+}
+
+impl From<SongNumber> for u8 {
+    #[inline(always)]
+    fn from(s: SongNumber) -> u8 {
+        s.0
     }
 }
 

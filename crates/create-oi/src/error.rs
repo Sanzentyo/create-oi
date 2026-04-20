@@ -44,18 +44,6 @@ pub enum Error<E> {
 
     /// A value was invalid for its domain type.
     Validation(ValidationError),
-
-    /// The actual OI mode on the hardware does not match the expected TypeState.
-    ModeMismatch {
-        expected: &'static str,
-        actual: &'static str,
-    },
-
-    /// Connection to the robot failed.
-    Connection(&'static str),
-
-    /// The robot is not connected.
-    NotConnected,
 }
 
 impl<E: fmt::Display> fmt::Display for Error<E> {
@@ -64,11 +52,6 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Protocol(e) => write!(f, "{e}"),
             Self::Validation(e) => write!(f, "{e}"),
-            Self::ModeMismatch { expected, actual } => {
-                write!(f, "mode mismatch: expected {expected}, actual {actual}")
-            }
-            Self::Connection(msg) => write!(f, "connection failed: {msg}"),
-            Self::NotConnected => write!(f, "robot not connected"),
         }
     }
 }
@@ -80,7 +63,6 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
             Self::Io(e) => Some(e),
             Self::Protocol(e) => Some(e),
             Self::Validation(e) => Some(e),
-            _ => None,
         }
     }
 }

@@ -14,6 +14,18 @@ mod sealed {
 }
 
 // ---------------------------------------------------------------------------
+// Capability-sealed traits (prevent external impl for wrong modes)
+// ---------------------------------------------------------------------------
+
+/// Private supertraits that gate capability implementations.
+/// External code cannot name these traits, so cannot add new impls.
+mod cap_sealed {
+    pub trait SensorCapable {}
+    pub trait ActuateCapable {}
+    pub trait FullCapable {}
+}
+
+// ---------------------------------------------------------------------------
 // Mode markers
 // ---------------------------------------------------------------------------
 
@@ -76,14 +88,25 @@ impl Mode for Full {
 // ---------------------------------------------------------------------------
 
 /// Modes where sensor reading is available: Passive, Safe, Full.
-pub trait SensorReadable: Mode {}
+///
+/// This trait is sealed: only the pre-defined mode markers implement it.
+pub trait SensorReadable: Mode + cap_sealed::SensorCapable {}
+
+impl cap_sealed::SensorCapable for Passive {}
+impl cap_sealed::SensorCapable for Safe {}
+impl cap_sealed::SensorCapable for Full {}
 
 impl SensorReadable for Passive {}
 impl SensorReadable for Safe {}
 impl SensorReadable for Full {}
 
 /// Modes where actuator commands are available: Safe, Full.
-pub trait Actuatable: SensorReadable {}
+///
+/// This trait is sealed: only the pre-defined mode markers implement it.
+pub trait Actuatable: SensorReadable + cap_sealed::ActuateCapable {}
+
+impl cap_sealed::ActuateCapable for Safe {}
+impl cap_sealed::ActuateCapable for Full {}
 
 impl Actuatable for Safe {}
 impl Actuatable for Full {}
@@ -92,7 +115,11 @@ impl Actuatable for Full {}
 ///
 /// Commands in this category can override all safety checks and affect
 /// robot scheduling or simulated inputs. Only [`Full`] implements this trait.
-pub trait FullControl: Actuatable {}
+///
+/// This trait is sealed: only the pre-defined mode markers implement it.
+pub trait FullControl: Actuatable + cap_sealed::FullCapable {}
+
+impl cap_sealed::FullCapable for Full {}
 
 impl FullControl for Full {}
 
