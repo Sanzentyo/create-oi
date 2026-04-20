@@ -22,7 +22,7 @@ repository = "https://github.com/Sanzentyo/create-oi"
 rust-version = "1.85"
 
 [workspace.dependencies]
-create-oi-protocol = { path = "crates/create-oi-protocol" }
+create-oi-protocol = { path = "crates/create-oi-protocol", default-features = false }
 create-oi = { path = "crates/create-oi" }
 thiserror = "2"
 serialport = "4.9"

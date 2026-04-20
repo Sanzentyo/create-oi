@@ -1,63 +1,72 @@
 //! Transport layer traits.
 //!
 //! These traits abstract over the physical connection to the robot.
-//! The sync [`Transport`] trait is for blocking I/O, and the
-//! [`AsyncTransport`] trait is for async runtimes (tokio, smol, etc.).
+//! They use associated error types for `no_std` compatibility.
+//!
+//! - [`AsyncTransport`] — async I/O + timer (works with Embassy, tokio, smol)
+//! - [`Transport`] — blocking I/O (requires `std` feature)
 //!
 //! Concrete implementations live in their own crates:
 //! - `create-oi-serial` — [`Transport`] via `serialport`
 //! - `create-oi-tokio` — [`AsyncTransport`] via `tokio-serial`
 //! - `create-oi-smol` — [`AsyncTransport`] via `smol` + `async-io`
+//! - `create-oi-embassy` — [`AsyncTransport`] via Embassy UART
 
-use std::io;
-use std::time::Duration;
-
-/// Synchronous transport for communicating with the robot.
-pub trait Transport: std::fmt::Debug + Send {
-    /// Write all bytes to the transport.
-    fn write_all(&mut self, data: &[u8]) -> io::Result<()>;
-
-    /// Read available bytes into `buf`. Returns the number of bytes read.
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-
-    /// Flush the output buffer.
-    fn flush(&mut self) -> io::Result<()>;
-
-    /// Set the read timeout. `None` means blocking forever.
-    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()>;
-
-    /// Close the transport. After this, reads/writes should return errors.
-    fn close(&mut self) -> io::Result<()>;
-}
+use core::fmt;
+use core::time::Duration;
 
 /// Asynchronous transport for communicating with the robot.
 ///
-/// Implement this trait in a runtime-specific crate (e.g. `create-oi-tokio`).
+/// This trait bundles async read/write/flush plus a timer abstraction.
+/// It intentionally does **not** require `Send` — Embassy peripherals
+/// are often `!Send` and pinned to a single executor.
 ///
 /// # Cancellation safety
 ///
 /// Async methods on this trait are **not** guaranteed to be cancellation-safe.
 /// If a future returned by `write_all` or `read` is dropped mid-execution,
-/// the transport may be left in an inconsistent state. Callers should avoid
-/// dropping these futures unless they intend to discard the transport.
-#[allow(async_fn_in_trait)]
-pub trait AsyncTransport: std::fmt::Debug + Send {
+/// the transport may be left in an inconsistent state.
+#[allow(async_fn_in_trait)] // Stable in edition 2024; no dyn dispatch needed here.
+pub trait AsyncTransport: fmt::Debug {
+    /// The error type for I/O operations.
+    type Error: fmt::Debug + fmt::Display;
+
     /// Write all bytes to the transport.
-    async fn write_all(&mut self, data: &[u8]) -> io::Result<()>;
+    async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
-    async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    /// Must return at least 1 byte on success (0 indicates EOF/disconnect).
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error>;
 
-    /// Flush the output buffer.
-    async fn flush(&mut self) -> io::Result<()>;
-
-    /// Close the transport.
-    async fn close(&mut self) -> io::Result<()>;
+    /// Flush the output buffer, ensuring all written bytes are sent.
+    async fn flush(&mut self) -> Result<(), Self::Error>;
 
     /// Sleep for the given duration using the runtime's timer.
     ///
-    /// This abstracts over `tokio::time::sleep` / `smol::Timer::after`
-    /// so that protocol-level delays (e.g. mode-change waits) don't
-    /// depend on a specific async runtime.
-    async fn sleep(&self, duration: Duration);
+    /// This abstracts over `tokio::time::sleep` / `smol::Timer::after` /
+    /// `embassy_time::Timer::after` so that protocol-level delays
+    /// (e.g. mode-change waits) don't depend on a specific runtime.
+    async fn delay(&self, duration: Duration);
+}
+
+/// Synchronous (blocking) transport for communicating with the robot.
+///
+/// This trait is only available with the `std` feature. For embedded
+/// targets, use [`AsyncTransport`] instead.
+#[cfg(feature = "std")]
+pub trait Transport: fmt::Debug + Send {
+    /// Write all bytes to the transport.
+    fn write_all(&mut self, data: &[u8]) -> std::io::Result<()>;
+
+    /// Read available bytes into `buf`. Returns the number of bytes read.
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
+
+    /// Flush the output buffer.
+    fn flush(&mut self) -> std::io::Result<()>;
+
+    /// Set the read timeout. `None` means blocking forever.
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()>;
+
+    /// Close the transport. After this, reads/writes should return errors.
+    fn close(&mut self) -> std::io::Result<()>;
 }

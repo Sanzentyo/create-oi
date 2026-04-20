@@ -3,7 +3,7 @@
 //! The iRobot OI defines four modes. We encode them as zero-sized marker
 //! types so the compiler prevents invalid operations at each mode.
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 // ---------------------------------------------------------------------------
 // Sealed trait
@@ -40,7 +40,7 @@ pub struct Full;
 /// Trait implemented by all OI mode markers.
 ///
 /// This is sealed — external code cannot implement additional modes.
-pub trait Mode: sealed::Sealed + std::fmt::Debug + Copy + Send + Sync + 'static {
+pub trait Mode: sealed::Sealed + core::fmt::Debug + Copy + Send + Sync + 'static {
     /// Human-readable name of this mode.
     fn name() -> &'static str;
 }
