@@ -2,10 +2,17 @@
 //!
 //! Uses `async-io` to wrap the synchronous `serialport` handle for
 //! non-blocking operation on the smol runtime.
+//!
+//! **Status: experimental / stub** — `open()` currently returns
+//! `Unsupported` because wrapping the serialport fd requires
+//! platform-specific `AsRawFd` extraction.
 
 use std::io;
 
-use crate::types::RobotModel;
+use create_oi::types::RobotModel;
+
+/// Re-export core types for convenience.
+pub use create_oi;
 
 /// Async transport for the smol runtime.
 ///
@@ -17,7 +24,7 @@ pub struct SmolTransport {
         dead_code,
         reason = "stub: will be used once fd extraction is implemented"
     )]
-    port: async_io::Async<crate::io::serial::SerialTransport>,
+    port: async_io::Async<create_oi_serial::SerialTransport>,
 }
 
 impl SmolTransport {
@@ -27,7 +34,7 @@ impl SmolTransport {
     /// This currently requires `unsafe` to extract the raw fd from the serial port.
     /// We gate behind a feature flag and document this caveat.
     pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
-        let _inner = crate::io::serial::SerialTransport::open(path, model)?;
+        let _inner = create_oi_serial::SerialTransport::open(path, model)?;
         // async-io::Async requires the inner type to implement AsRawFd (Unix)
         // or AsRawSocket (Windows). Since SerialTransport wraps Box<dyn SerialPort>,
         // we cannot directly satisfy this. This is a known limitation.

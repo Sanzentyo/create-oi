@@ -1,10 +1,16 @@
 //! Serial port transport using the `serialport` crate.
+//!
+//! Provides [`SerialTransport`], a synchronous [`Transport`] implementation
+//! for communicating with iRobot Create / Roomba robots over a serial port.
 
 use std::io;
 use std::time::Duration;
 
-use crate::transport::Transport;
-use crate::types::RobotModel;
+use create_oi::transport::Transport;
+use create_oi::types::RobotModel;
+
+/// Re-export core types for convenience.
+pub use create_oi;
 
 /// Synchronous serial port transport.
 #[derive(Debug)]

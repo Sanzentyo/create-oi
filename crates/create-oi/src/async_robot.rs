@@ -1,13 +1,13 @@
 //! Asynchronous robot API with TypeState mode tracking.
 //!
-//! [`AsyncRobot<M, T>`] is the async counterpart to
-//! [`Robot<M, T>`](crate::robot::Robot). It provides the same TypeState
+//! [`AsyncCreate<M, T>`] is the async counterpart to
+//! [`Create<M, T>`](crate::robot::Create). It provides the same TypeState
 //! guarantees (the OI mode is encoded as a type parameter) but all I/O
 //! operations are `async`.
 //!
 //! # Cancellation safety
 //!
-//! Most methods on `AsyncRobot` are **not** cancellation-safe. If a future
+//! Most methods on `AsyncCreate` are **not** cancellation-safe. If a future
 //! is dropped after the command bytes have been partially or fully written
 //! but before the response is read, the transport and robot state may be
 //! inconsistent. Prefer running transitions to completion or discarding
@@ -26,10 +26,10 @@ use std::marker::PhantomData;
 
 /// An asynchronous robot handle, parameterised by OI mode `M` and transport `T`.
 ///
-/// Mode transitions consume `self` and return a new `AsyncRobot` in the target
+/// Mode transitions consume `self` and return a new `AsyncCreate` in the target
 /// mode, ensuring the compiler enforces valid mode sequences.
 #[derive(Debug)]
-pub struct AsyncRobot<M: Mode, T: AsyncTransport> {
+pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
     transport: T,
     model: RobotModel,
     stream_parser: StreamParser,
@@ -40,7 +40,7 @@ pub struct AsyncRobot<M: Mode, T: AsyncTransport> {
 // Construction (Off mode)
 // ---------------------------------------------------------------------------
 
-impl<T: AsyncTransport> AsyncRobot<Off, T> {
+impl<T: AsyncTransport> AsyncCreate<Off, T> {
     /// Create a new async robot handle wrapping the given transport.
     /// The robot is assumed to be in the `Off` state.
     pub fn new(transport: T, model: RobotModel) -> Self {
@@ -53,7 +53,7 @@ impl<T: AsyncTransport> AsyncRobot<Off, T> {
     }
 
     /// Send the START command and transition to Passive mode.
-    pub async fn start(mut self) -> Result<AsyncRobot<Passive, T>, ConnectError<T>> {
+    pub async fn start(mut self) -> Result<AsyncCreate<Passive, T>, ConnectError<T>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(ConnectError {
                 transport: self.transport,
@@ -69,9 +69,9 @@ impl<T: AsyncTransport> AsyncRobot<Off, T> {
 // Mode transitions (available from Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<T: AsyncTransport> AsyncRobot<Passive, T> {
+impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     /// Transition to Safe mode.
-    pub async fn to_safe(mut self) -> Result<AsyncRobot<Safe, T>, TransitionError<Self>> {
+    pub async fn to_safe(mut self) -> Result<AsyncCreate<Safe, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
                 robot: self,
@@ -83,7 +83,7 @@ impl<T: AsyncTransport> AsyncRobot<Passive, T> {
     }
 
     /// Transition to Full mode.
-    pub async fn to_full(mut self) -> Result<AsyncRobot<Full, T>, TransitionError<Self>> {
+    pub async fn to_full(mut self) -> Result<AsyncCreate<Full, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
                 robot: self,
@@ -95,9 +95,9 @@ impl<T: AsyncTransport> AsyncRobot<Passive, T> {
     }
 }
 
-impl<T: AsyncTransport> AsyncRobot<Safe, T> {
+impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     /// Transition to Full mode.
-    pub async fn to_full(mut self) -> Result<AsyncRobot<Full, T>, TransitionError<Self>> {
+    pub async fn to_full(mut self) -> Result<AsyncCreate<Full, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
                 robot: self,
@@ -109,7 +109,7 @@ impl<T: AsyncTransport> AsyncRobot<Safe, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub async fn to_passive(mut self) -> Result<AsyncRobot<Passive, T>, TransitionError<Self>> {
+    pub async fn to_passive(mut self) -> Result<AsyncCreate<Passive, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
                 robot: self,
@@ -121,9 +121,9 @@ impl<T: AsyncTransport> AsyncRobot<Safe, T> {
     }
 }
 
-impl<T: AsyncTransport> AsyncRobot<Full, T> {
+impl<T: AsyncTransport> AsyncCreate<Full, T> {
     /// Fall back to Safe mode.
-    pub async fn to_safe(mut self) -> Result<AsyncRobot<Safe, T>, TransitionError<Self>> {
+    pub async fn to_safe(mut self) -> Result<AsyncCreate<Safe, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
                 robot: self,
@@ -135,7 +135,7 @@ impl<T: AsyncTransport> AsyncRobot<Full, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub async fn to_passive(mut self) -> Result<AsyncRobot<Passive, T>, TransitionError<Self>> {
+    pub async fn to_passive(mut self) -> Result<AsyncCreate<Passive, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
                 robot: self,
@@ -151,7 +151,7 @@ impl<T: AsyncTransport> AsyncRobot<Full, T> {
 // Sensor reading (Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<M: SensorReadable, T: AsyncTransport> AsyncRobot<M, T> {
+impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query a single sensor packet by ID and return the raw bytes.
     pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
         self.send_cmd(&command::encode_sensors(packet_id)).await?;
@@ -219,7 +219,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncRobot<M, T> {
 // Actuator commands (Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<M: Actuatable, T: AsyncTransport> AsyncRobot<M, T> {
+impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Drive with a given velocity and radius.
     pub async fn drive(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
         self.send_cmd(&command::encode_drive(
@@ -302,7 +302,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncRobot<M, T> {
 // Common utilities (all modes)
 // ---------------------------------------------------------------------------
 
-impl<M: Mode, T: AsyncTransport> AsyncRobot<M, T> {
+impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     /// Get the robot model.
     pub fn model(&self) -> RobotModel {
         self.model
@@ -355,8 +355,8 @@ impl<M: Mode, T: AsyncTransport> AsyncRobot<M, T> {
     }
 
     /// Transition to a different mode (zero-cost: just changes the type parameter).
-    fn transition<N: Mode>(self) -> AsyncRobot<N, T> {
-        AsyncRobot {
+    fn transition<N: Mode>(self) -> AsyncCreate<N, T> {
+        AsyncCreate {
             transport: self.transport,
             model: self.model,
             stream_parser: self.stream_parser,

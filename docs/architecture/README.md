@@ -10,49 +10,53 @@ It supports Create 1, Create 2, and compatible Roomba robots over serial.
 
 - **Sans-IO**: Protocol encoding/decoding is completely independent of I/O.
   The `protocol` module works on plain `&[u8]` — zero allocation, zero copy.
-- **TypeState**: The OI mode is encoded as a type parameter on `Robot<M, T>`.
+- **TypeState**: The OI mode is encoded as a type parameter on `Create<M, T>`.
   Invalid operations are compile-time errors, not runtime panics.
-- **Feature-gated transports**: Sync serial, tokio async, smol async — pick your runtime.
+- **Multi-crate workspace**: Core protocol is independent; transports are separate crates.
 - **Minimal dependencies**: Core depends only on `thiserror`. No proc macros.
 - **MIT OR Apache-2.0**: Independent implementation of the open OI spec.
 
-## Module Structure
+## Workspace Structure
 
 ```
-src/
-├── lib.rs                  # Public API, feature-gate re-exports, prelude
-├── error.rs                # Error, TransitionError<R>, ConnectError<T>
-├── types.rs                # Domain ADTs + validated newtypes
-├── mode.rs                 # TypeState markers + sealed capability traits
-├── protocol.rs             # Sans-IO protocol module root
-├── protocol/
-│   ├── opcode.rs           # All OI opcodes + sensor packet metadata table
-│   ├── command.rs          # Command encoding → fixed-size byte arrays
-│   ├── sensor.rs           # Sensor packet parsing from &[u8]
-│   └── stream.rs           # Stream framing state machine (feed(&[u8]))
-├── transport.rs            # Transport + AsyncTransport trait definitions
-├── robot.rs                # Robot<M, T: Transport> — sync API
-├── async_robot.rs          # AsyncRobot<M, T: AsyncTransport> — async API
-├── io.rs                   # Concrete transport module root
-└── io/
-    ├── serial.rs           # SerialTransport (feature = "serial")
-    ├── tokio.rs            # TokioTransport (feature = "tokio-runtime")
-    └── smol.rs             # SmolTransport (feature = "smol-runtime")
+Cargo.toml                       # Virtual workspace manifest
+crates/
+├── create-oi/                   # Core: protocol, types, traits, Create<M,T>, AsyncCreate<M,T>
+│   ├── src/
+│   │   ├── lib.rs               # Public API + prelude
+│   │   ├── error.rs             # Error, TransitionError<R>, ConnectError<T>
+│   │   ├── types.rs             # Domain ADTs + validated newtypes
+│   │   ├── mode.rs              # TypeState markers + sealed capability traits
+│   │   ├── transport.rs         # Transport + AsyncTransport trait definitions
+│   │   ├── robot.rs             # Create<M, T: Transport> — sync API
+│   │   ├── async_robot.rs       # AsyncCreate<M, T: AsyncTransport> — async API
+│   │   └── protocol/
+│   │       ├── opcode.rs        # OI opcodes + sensor packet metadata table
+│   │       ├── command.rs       # Command encoding → fixed-size byte arrays
+│   │       ├── sensor.rs        # Sensor packet parsing from &[u8]
+│   │       └── stream.rs        # Stream framing state machine
+│   └── tests/
+│       ├── mock_robot.rs        # 14 sync integration tests
+│       └── mock_async_robot.rs  # 13 async integration tests
+├── create-oi-serial/            # SerialTransport (sync)
+├── create-oi-tokio/             # TokioTransport (async, tokio runtime)
+├── create-oi-smol/              # SmolTransport (experimental, publish=false)
+└── create-oi-dora/              # dora-rs dataflow node (publish=false)
 ```
 
 ## TypeState Pattern
 
-The robot's OI mode is encoded in the type system. Both `Robot<M, T>` (sync)
-and `AsyncRobot<M, T>` (async) share the same TypeState model:
+The robot's OI mode is encoded in the type system. Both `Create<M, T>` (sync)
+and `AsyncCreate<M, T>` (async) share the same TypeState model:
 
 ```
-Robot<Off, T> ─start()→ Robot<Passive, T> ─to_safe()→ Robot<Safe, T>
-                              │                            │
-                              └─to_full()→ Robot<Full, T> ←┘
+Create<Off, T> ─start()→ Create<Passive, T> ─to_safe()→ Create<Safe, T>
+                               │                            │
+                               └─to_full()→ Create<Full, T> ←┘
 ```
 
-- Mode transitions **consume** `self` and return `Robot<NewMode, T>`
-- Invalid operations (e.g., `drive()` on `Robot<Passive, _>`) are compile errors
+- Mode transitions **consume** `self` and return `Create<NewMode, T>`
+- Invalid operations (e.g., `drive()` on `Create<Passive, _>`) are compile errors
 - Failed transitions return `TransitionError { robot, source }` preserving the robot
 - Failed connects return `ConnectError { transport, source }` preserving the transport
 - Sealed capability traits (`SensorReadable`, `Actuatable`) gate method availability
@@ -83,17 +87,20 @@ The `protocol` module has zero I/O dependencies:
 3. **Sensors** (`sensor.rs`): Decode sensor packets from `&[u8]` into `SensorData`
 4. **Stream** (`stream.rs`): `StreamParser` with `feed(&[u8])` state machine
 
-## Feature Flags
+## Crates
 
-| Feature | Dependencies | Description |
-|---------|-------------|-------------|
-| `serial` (default) | `serialport 4.9` | Synchronous serial transport |
-| `tokio-runtime` | `tokio 1`, `tokio-serial 5.4`, `futures-io 0.3` | Tokio async transport |
-| `smol-runtime` | `smol 2`, `async-io 2`, `futures-io 0.3` | Smol async transport |
+| Crate | Description | Dependencies |
+|-------|-------------|-------------|
+| `create-oi` | Core protocol, types, traits | `thiserror` |
+| `create-oi-serial` | Sync serial transport | `create-oi`, `serialport 4.9` |
+| `create-oi-tokio` | Tokio async transport | `create-oi`, `tokio 1`, `tokio-serial 5.4` |
+| `create-oi-smol` | Smol async transport (stub) | `create-oi`, `smol 2`, `async-io 2` |
+| `create-oi-dora` | dora-rs dataflow node | `create-oi`, `dora-node-api 0.3` |
 
 ## Build & Test
 
 ```bash
 just ci       # fmt-check + clippy + build + test
-just ci-all   # same but with --all-features
+just check    # fast workspace check
+just doc      # generate docs
 ```

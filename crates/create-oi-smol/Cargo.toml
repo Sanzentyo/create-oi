@@ -1,0 +1,18 @@
+[package]
+name = "create-oi-smol"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Smol async transport for create-oi (iRobot Create/Roomba) — experimental"
+keywords = ["irobot", "create", "roomba", "smol", "async"]
+categories = ["hardware-support", "asynchronous"]
+publish = false  # stub — not ready for crates.io
+
+[dependencies]
+create-oi.workspace = true
+create-oi-serial = { path = "../create-oi-serial" }
+smol.workspace = true
+async-io.workspace = true
+serialport.workspace = true

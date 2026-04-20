@@ -4,33 +4,25 @@ set shell := ["bash", "-cu"]
 default:
     @just --list
 
-# Build with default features (serial)
+# Build default workspace members (core, serial, tokio)
 build:
-    cargo build
+    cargo build --workspace
 
-# Build with all features
+# Build ALL crates including experimental (smol, dora)
 build-all:
-    cargo build --all-features
+    cargo build --workspace --all-targets
 
 # Build in release mode
 release:
-    cargo build --release
+    cargo build --workspace --release
 
-# Run all tests (default features)
+# Run all tests (default members)
 test: build
-    cargo test
+    cargo test --workspace
 
-# Run tests with all features
-test-all: build-all
-    cargo test --all-features
-
-# Run clippy lints
+# Run clippy lints on the entire workspace
 clippy:
-    cargo clippy --all-targets -- -D warnings
-
-# Run clippy with all features
-clippy-all:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Format code
 fmt:
@@ -43,25 +35,14 @@ fmt-check:
 # Full CI check: format, clippy, build, test
 ci: fmt-check clippy build test
 
-# Full CI with all features
-ci-all: fmt-check clippy-all build-all test-all
-
 # Clean build artifacts
 clean:
     cargo clean
 
-# Generate documentation
+# Generate documentation for all workspace crates
 doc:
-    cargo doc --no-deps --open
+    cargo doc --workspace --no-deps --open
 
-# Generate docs with all features
-doc-all:
-    cargo doc --no-deps --all-features --open
-
-# Check the crate compiles without producing artifacts
+# Check the workspace compiles without producing artifacts
 check:
-    cargo check
-
-# Check with all features
-check-all:
-    cargo check --all-features
+    cargo check --workspace --all-targets

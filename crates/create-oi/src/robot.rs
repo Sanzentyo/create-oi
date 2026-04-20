@@ -1,9 +1,9 @@
 //! Synchronous robot API with TypeState mode tracking.
 //!
-//! `Robot<M, T>` wraps a [`Transport`](crate::transport::Transport) and
+//! `Create<M, T>` wraps a [`Transport`](crate::transport::Transport) and
 //! encodes the current OI mode as a type parameter. Commands that require
-//! specific modes are only available on the relevant `Robot<Safe, T>` or
-//! `Robot<Full, T>` specialisations.
+//! specific modes are only available on the relevant `Create<Safe, T>` or
+//! `Create<Full, T>` specialisations.
 
 use crate::error::{ConnectError, Error, TransitionError};
 use crate::mode::{Actuatable, Full, Mode, Off, Passive, Safe, SensorReadable};
@@ -18,10 +18,10 @@ use std::marker::PhantomData;
 
 /// A synchronous robot handle, parameterised by OI mode `M` and transport `T`.
 ///
-/// Mode transitions consume `self` and return a new `Robot` in the target mode,
+/// Mode transitions consume `self` and return a new `Create` in the target mode,
 /// ensuring the compiler enforces valid mode sequences.
 #[derive(Debug)]
-pub struct Robot<M: Mode, T: Transport> {
+pub struct Create<M: Mode, T: Transport> {
     transport: T,
     model: RobotModel,
     stream_parser: StreamParser,
@@ -32,7 +32,7 @@ pub struct Robot<M: Mode, T: Transport> {
 // Construction (Off mode)
 // ---------------------------------------------------------------------------
 
-impl<T: Transport> Robot<Off, T> {
+impl<T: Transport> Create<Off, T> {
     /// Create a new robot handle wrapping the given transport.
     /// The robot is assumed to be in the `Off` state.
     pub fn new(transport: T, model: RobotModel) -> Self {
@@ -45,7 +45,7 @@ impl<T: Transport> Robot<Off, T> {
     }
 
     /// Send the START command and transition to Passive mode.
-    pub fn start(mut self) -> Result<Robot<Passive, T>, ConnectError<T>> {
+    pub fn start(mut self) -> Result<Create<Passive, T>, ConnectError<T>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(ConnectError {
                 transport: self.transport,
@@ -61,9 +61,9 @@ impl<T: Transport> Robot<Off, T> {
 // Mode transitions (available from Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<T: Transport> Robot<Passive, T> {
+impl<T: Transport> Create<Passive, T> {
     /// Transition to Safe mode.
-    pub fn to_safe(mut self) -> Result<Robot<Safe, T>, TransitionError<Self>> {
+    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
                 robot: self,
@@ -75,7 +75,7 @@ impl<T: Transport> Robot<Passive, T> {
     }
 
     /// Transition to Full mode.
-    pub fn to_full(mut self) -> Result<Robot<Full, T>, TransitionError<Self>> {
+    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
                 robot: self,
@@ -87,9 +87,9 @@ impl<T: Transport> Robot<Passive, T> {
     }
 }
 
-impl<T: Transport> Robot<Safe, T> {
+impl<T: Transport> Create<Safe, T> {
     /// Transition to Full mode.
-    pub fn to_full(mut self) -> Result<Robot<Full, T>, TransitionError<Self>> {
+    pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
                 robot: self,
@@ -101,7 +101,7 @@ impl<T: Transport> Robot<Safe, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub fn to_passive(mut self) -> Result<Robot<Passive, T>, TransitionError<Self>> {
+    pub fn to_passive(mut self) -> Result<Create<Passive, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
                 robot: self,
@@ -113,9 +113,9 @@ impl<T: Transport> Robot<Safe, T> {
     }
 }
 
-impl<T: Transport> Robot<Full, T> {
+impl<T: Transport> Create<Full, T> {
     /// Fall back to Safe mode.
-    pub fn to_safe(mut self) -> Result<Robot<Safe, T>, TransitionError<Self>> {
+    pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
                 robot: self,
@@ -127,7 +127,7 @@ impl<T: Transport> Robot<Full, T> {
     }
 
     /// Fall back to Passive mode (sends START).
-    pub fn to_passive(mut self) -> Result<Robot<Passive, T>, TransitionError<Self>> {
+    pub fn to_passive(mut self) -> Result<Create<Passive, T>, TransitionError<Self>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
                 robot: self,
@@ -143,7 +143,7 @@ impl<T: Transport> Robot<Full, T> {
 // Sensor reading (Passive, Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<M: SensorReadable, T: Transport> Robot<M, T> {
+impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query a single sensor packet by ID and return the raw bytes.
     pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error> {
         self.send_cmd(&command::encode_sensors(packet_id))?;
@@ -210,7 +210,7 @@ impl<M: SensorReadable, T: Transport> Robot<M, T> {
 // Actuator commands (Safe, Full)
 // ---------------------------------------------------------------------------
 
-impl<M: Actuatable, T: Transport> Robot<M, T> {
+impl<M: Actuatable, T: Transport> Create<M, T> {
     /// Drive with a given velocity and radius.
     pub fn drive(&mut self, velocity: Velocity, radius: Radius) -> Result<(), Error> {
         self.send_cmd(&command::encode_drive(
@@ -283,7 +283,7 @@ impl<M: Actuatable, T: Transport> Robot<M, T> {
 // Common utilities (all modes)
 // ---------------------------------------------------------------------------
 
-impl<M: Mode, T: Transport> Robot<M, T> {
+impl<M: Mode, T: Transport> Create<M, T> {
     /// Get the robot model.
     pub fn model(&self) -> RobotModel {
         self.model
@@ -332,8 +332,8 @@ impl<M: Mode, T: Transport> Robot<M, T> {
     }
 
     /// Transition to a different mode (zero-cost: just changes the type parameter).
-    fn transition<N: Mode>(self) -> Robot<N, T> {
-        Robot {
+    fn transition<N: Mode>(self) -> Create<N, T> {
+        Create {
             transport: self.transport,
             model: self.model,
             stream_parser: self.stream_parser,

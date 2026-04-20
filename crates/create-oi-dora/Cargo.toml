@@ -1,0 +1,22 @@
+[package]
+name = "create-oi-dora"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "dora-rs dataflow node for iRobot Create/Roomba robots"
+keywords = ["irobot", "create", "roomba", "dora", "robotics"]
+categories = ["hardware-support", "science::robotics"]
+publish = false  # integration crate — published separately if needed
+
+[dependencies]
+create-oi.workspace = true
+create-oi-serial = { path = "../create-oi-serial" }
+dora-node-api = "0.3"
+arrow = { version = "54", default-features = false, features = ["json"] }
+eyre = "0.6"
+
+[[example]]
+name = "dora_create_driver"
+path = "examples/dora_create_driver.rs"

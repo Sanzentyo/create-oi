@@ -1,9 +1,15 @@
 //! Tokio async transport for the robot.
+//!
+//! Provides [`TokioTransport`], an [`AsyncTransport`] implementation
+//! for communicating with iRobot Create / Roomba robots via `tokio-serial`.
 
 use std::io;
 
-use crate::transport::AsyncTransport;
-use crate::types::RobotModel;
+use create_oi::transport::AsyncTransport;
+use create_oi::types::RobotModel;
+
+/// Re-export core types for convenience.
+pub use create_oi;
 
 /// Async transport backed by `tokio-serial`.
 #[derive(Debug)]
