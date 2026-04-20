@@ -329,7 +329,7 @@ const GROUP_100_IDS: [u8; 52] = [
 ];
 
 /// Sensor packet group definitions. Each group returns a contiguous range of packets.
-pub fn group_packet_ids(group: u8) -> Option<&'static [u8]> {
+pub const fn group_packet_ids(group: u8) -> Option<&'static [u8]> {
     match group {
         0 => Some(&[
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
@@ -346,21 +346,39 @@ pub fn group_packet_ids(group: u8) -> Option<&'static [u8]> {
 }
 
 /// Total byte length for a group of sensor packets.
-pub fn group_data_len(group: u8) -> Option<usize> {
-    let ids = group_packet_ids(group)?;
-    let total = ids
-        .iter()
-        .map(|id| packet_info(*id).map_or(0, |p| p.len as usize))
-        .sum();
+pub const fn group_data_len(group: u8) -> Option<usize> {
+    let ids = match group_packet_ids(group) {
+        Some(ids) => ids,
+        None => return None,
+    };
+    let mut total = 0usize;
+    let mut i = 0;
+    while i < ids.len() {
+        if let Some(p) = packet_info(ids[i]) {
+            total += p.len as usize;
+        }
+        i += 1;
+    }
     Some(total)
 }
 
 /// Look up packet info by ID.
-pub fn packet_info(id: u8) -> Option<&'static PacketInfo> {
-    SENSOR_PACKETS.iter().find(|p| p.id == id)
+#[inline(always)]
+pub const fn packet_info(id: u8) -> Option<&'static PacketInfo> {
+    if 7 <= id && id <= 58 {
+        Some(&SENSOR_PACKETS[(id - 7) as usize])
+    } else {
+        None
+    }
 }
 
 /// Total data bytes for group 100 (all sensors).
-pub fn all_sensors_data_len() -> usize {
-    SENSOR_PACKETS.iter().map(|p| p.len as usize).sum()
+pub const fn all_sensors_data_len() -> usize {
+    let mut total = 0usize;
+    let mut i = 0;
+    while i < SENSOR_PACKETS.len() {
+        total += SENSOR_PACKETS[i].len as usize;
+        i += 1;
+    }
+    total
 }

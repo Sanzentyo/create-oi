@@ -13,39 +13,49 @@ use crate::opcode::packet_info;
 // ---------------------------------------------------------------------------
 
 /// Decode a single unsigned value from big-endian bytes.
-pub fn decode_u8(data: &[u8]) -> Result<u8, ProtocolError> {
-    data.first()
-        .copied()
-        .ok_or(ProtocolError::InsufficientData { need: 1, got: 0 })
+#[inline(always)]
+pub const fn decode_u8(data: &[u8]) -> Result<u8, ProtocolError> {
+    if data.is_empty() {
+        Err(ProtocolError::InsufficientData { need: 1, got: 0 })
+    } else {
+        Ok(data[0])
+    }
 }
 
 /// Decode a signed 8-bit value.
-pub fn decode_i8(data: &[u8]) -> Result<i8, ProtocolError> {
-    data.first()
-        .map(|&b| b as i8)
-        .ok_or(ProtocolError::InsufficientData { need: 1, got: 0 })
+#[inline(always)]
+pub const fn decode_i8(data: &[u8]) -> Result<i8, ProtocolError> {
+    if data.is_empty() {
+        Err(ProtocolError::InsufficientData { need: 1, got: 0 })
+    } else {
+        Ok(data[0] as i8)
+    }
 }
 
 /// Decode a 16-bit unsigned value from big-endian bytes.
-pub fn decode_u16(data: &[u8]) -> Result<u16, ProtocolError> {
+#[inline(always)]
+pub const fn decode_u16(data: &[u8]) -> Result<u16, ProtocolError> {
     if data.len() < 2 {
-        return Err(ProtocolError::InsufficientData {
+        Err(ProtocolError::InsufficientData {
             need: 2,
             got: data.len(),
-        });
+        })
+    } else {
+        Ok(u16::from_be_bytes([data[0], data[1]]))
     }
-    Ok(u16::from_be_bytes([data[0], data[1]]))
 }
 
 /// Decode a 16-bit signed value from big-endian bytes.
-pub fn decode_i16(data: &[u8]) -> Result<i16, ProtocolError> {
+#[inline(always)]
+pub const fn decode_i16(data: &[u8]) -> Result<i16, ProtocolError> {
     if data.len() < 2 {
-        return Err(ProtocolError::InsufficientData {
+        Err(ProtocolError::InsufficientData {
             need: 2,
             got: data.len(),
-        });
+        })
+    } else {
+        Ok(i16::from_be_bytes([data[0], data[1]]))
     }
-    Ok(i16::from_be_bytes([data[0], data[1]]))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,23 +170,39 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if the right bump sensor is active.
-    pub fn is_right_bump(&self) -> Option<bool> {
-        self.bumps_and_wheeldrops.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_right_bump(&self) -> Option<bool> {
+        match self.bumps_and_wheeldrops {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the left bump sensor is active.
-    pub fn is_left_bump(&self) -> Option<bool> {
-        self.bumps_and_wheeldrops.map(|b| b & 0x02 != 0)
+    #[inline(always)]
+    pub const fn is_left_bump(&self) -> Option<bool> {
+        match self.bumps_and_wheeldrops {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the right wheel has dropped.
-    pub fn is_right_wheeldrop(&self) -> Option<bool> {
-        self.bumps_and_wheeldrops.map(|b| b & 0x04 != 0)
+    #[inline(always)]
+    pub const fn is_right_wheeldrop(&self) -> Option<bool> {
+        match self.bumps_and_wheeldrops {
+            Some(b) => Some(b & 0x04 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the left wheel has dropped.
-    pub fn is_left_wheeldrop(&self) -> Option<bool> {
-        self.bumps_and_wheeldrops.map(|b| b & 0x08 != 0)
+    #[inline(always)]
+    pub const fn is_left_wheeldrop(&self) -> Option<bool> {
+        match self.bumps_and_wheeldrops {
+            Some(b) => Some(b & 0x08 != 0),
+            None => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -184,43 +210,75 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if the Clean button is pressed.
-    pub fn is_button_clean(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_button_clean(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Spot button is pressed.
-    pub fn is_button_spot(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x02 != 0)
+    #[inline(always)]
+    pub const fn is_button_spot(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Dock button is pressed.
-    pub fn is_button_dock(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x04 != 0)
+    #[inline(always)]
+    pub const fn is_button_dock(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x04 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Minute button is pressed.
-    pub fn is_button_minute(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x08 != 0)
+    #[inline(always)]
+    pub const fn is_button_minute(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x08 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Hour button is pressed.
-    pub fn is_button_hour(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x10 != 0)
+    #[inline(always)]
+    pub const fn is_button_hour(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x10 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Day button is pressed.
-    pub fn is_button_day(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x20 != 0)
+    #[inline(always)]
+    pub const fn is_button_day(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x20 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Schedule button is pressed.
-    pub fn is_button_schedule(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x40 != 0)
+    #[inline(always)]
+    pub const fn is_button_schedule(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x40 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the Clock button is pressed.
-    pub fn is_button_clock(&self) -> Option<bool> {
-        self.buttons.map(|b| b & 0x80 != 0)
+    #[inline(always)]
+    pub const fn is_button_clock(&self) -> Option<bool> {
+        match self.buttons {
+            Some(b) => Some(b & 0x80 != 0),
+            None => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -228,23 +286,39 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if the side brush motor is drawing excessive current.
-    pub fn is_overcurrent_side_brush(&self) -> Option<bool> {
-        self.overcurrents.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_overcurrent_side_brush(&self) -> Option<bool> {
+        match self.overcurrents {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the main brush motor is drawing excessive current.
-    pub fn is_overcurrent_main_brush(&self) -> Option<bool> {
-        self.overcurrents.map(|b| b & 0x04 != 0)
+    #[inline(always)]
+    pub const fn is_overcurrent_main_brush(&self) -> Option<bool> {
+        match self.overcurrents {
+            Some(b) => Some(b & 0x04 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the right wheel motor is drawing excessive current.
-    pub fn is_overcurrent_right_wheel(&self) -> Option<bool> {
-        self.overcurrents.map(|b| b & 0x08 != 0)
+    #[inline(always)]
+    pub const fn is_overcurrent_right_wheel(&self) -> Option<bool> {
+        match self.overcurrents {
+            Some(b) => Some(b & 0x08 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the left wheel motor is drawing excessive current.
-    pub fn is_overcurrent_left_wheel(&self) -> Option<bool> {
-        self.overcurrents.map(|b| b & 0x10 != 0)
+    #[inline(always)]
+    pub const fn is_overcurrent_left_wheel(&self) -> Option<bool> {
+        match self.overcurrents {
+            Some(b) => Some(b & 0x10 != 0),
+            None => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -252,33 +326,57 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if the left light bumper is detecting an obstacle.
-    pub fn is_light_bump_left(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_left(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the front-left light bumper is detecting an obstacle.
-    pub fn is_light_bump_front_left(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x02 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_front_left(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the center-left light bumper is detecting an obstacle.
-    pub fn is_light_bump_center_left(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x04 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_center_left(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x04 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the center-right light bumper is detecting an obstacle.
-    pub fn is_light_bump_center_right(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x08 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_center_right(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x08 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the front-right light bumper is detecting an obstacle.
-    pub fn is_light_bump_front_right(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x10 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_front_right(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x10 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if the right light bumper is detecting an obstacle.
-    pub fn is_light_bump_right(&self) -> Option<bool> {
-        self.light_bumper.map(|b| b & 0x20 != 0)
+    #[inline(always)]
+    pub const fn is_light_bump_right(&self) -> Option<bool> {
+        match self.light_bumper {
+            Some(b) => Some(b & 0x20 != 0),
+            None => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -286,13 +384,21 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if charging via the home base dock.
-    pub fn is_charging_home_base(&self) -> Option<bool> {
-        self.charging_sources.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_charging_home_base(&self) -> Option<bool> {
+        match self.charging_sources {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if charging via the internal charger.
-    pub fn is_charging_internal(&self) -> Option<bool> {
-        self.charging_sources.map(|b| b & 0x02 != 0)
+    #[inline(always)]
+    pub const fn is_charging_internal(&self) -> Option<bool> {
+        match self.charging_sources {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -300,13 +406,21 @@ impl SensorData {
     // -----------------------------------------------------------------------
 
     /// Returns `true` if the stasis signal is toggling (robot is moving forward).
-    pub fn is_stasis_toggling(&self) -> Option<bool> {
-        self.stasis.map(|b| b & 0x01 != 0)
+    #[inline(always)]
+    pub const fn is_stasis_toggling(&self) -> Option<bool> {
+        match self.stasis {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
     }
 
     /// Returns `true` if stasis is disabled (Create 1 backward-compatibility mode).
-    pub fn is_stasis_disabled(&self) -> Option<bool> {
-        self.stasis.map(|b| b & 0x02 != 0)
+    #[inline(always)]
+    pub const fn is_stasis_disabled(&self) -> Option<bool> {
+        match self.stasis {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
     }
 
     fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), ProtocolError> {
@@ -370,14 +484,17 @@ impl SensorData {
 }
 
 /// Compute the expected total data length for a list of packet IDs.
-pub fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
-    ids.iter()
-        .map(|&id| {
-            packet_info(id)
-                .map(|p| p.len as usize)
-                .ok_or(ProtocolError::UnknownPacketId(id))
-        })
-        .sum()
+pub const fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
+    let mut total = 0usize;
+    let mut i = 0;
+    while i < ids.len() {
+        match packet_info(ids[i]) {
+            Some(p) => total += p.len as usize,
+            None => return Err(ProtocolError::UnknownPacketId(ids[i])),
+        }
+        i += 1;
+    }
+    Ok(total)
 }
 
 // ---------------------------------------------------------------------------

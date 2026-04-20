@@ -35,14 +35,12 @@
 - [x] **Embedded verified**: Builds for thumbv7em-none-eabihf (Cortex-M4F)
 - [x] **File renames**: robot.rs → create.rs, async_robot.rs → async_create.rs
 - [x] **resolver = "3"**: workspace Cargo.toml
-- [x] **Gap-fill phase**: All missing OI commands, sensor accessors, and control methods added
-  - New protocol encoders: SchedulingLeds (162), DigitLedsRaw (163), Buttons (165), Schedule (167)
-  - SensorData accessors: bump/wheeldrop, buttons, overcurrents, light bumper, charging, stasis
-  - `FullControl` trait sealed to Full mode; new `MotorBits`, `ButtonBits` typed structs
-  - Error source chain: `std::error::Error::source()` properly wired on all error types
-  - New control methods: `clean`, `seek_dock`, `power_off`, `reset`, `poll_stream_with`
-  - `Actuatable` methods: `set_motors`, `set_digit_leds_raw`, `drive_twist` (unicycle model)
-  - `FullControl` methods: `simulate_buttons`, `set_date`, `set_schedule`
+- [x] **const fn phase**: All eligible encode/decode/accessor functions made `const fn` + `#[inline(always)]`
+  - `command.rs`: all 25+ fixed-array encoders; `encode_schedule` rewritten with `while` loop
+  - `opcode.rs`: `packet_info`, `group_packet_ids`, `group_data_len`, `all_sensors_data_len` all `const fn`
+  - `sensor.rs`: `decode_u8/i8/u16/i16`, `expected_data_len`, all 20 `SensorData::is_*` bit-field accessors
+  - `protocol/types.rs`: `OiMode::from_raw/name`, `ChargingState::from_raw`, `DayOfWeek::to_raw`, `IrChar::from_raw`
+  - `create-oi/types.rs`: `CreateRobotModel` 7 methods, all getters, `PowerLedColor/LedIntensity/SongNumber`, `MotorBits/ButtonBits::to_raw`
 
 ### no_std Feature Hierarchy
 - `std` (default) → implies `alloc` + `create-oi-protocol/std`
