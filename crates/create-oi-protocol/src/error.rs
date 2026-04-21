@@ -50,6 +50,14 @@ pub enum ProtocolError {
         got: usize,
     },
 
+    /// The input contains fewer items than the OI protocol requires.
+    TooFewItems {
+        /// Minimum required number of items.
+        min: usize,
+        /// Number of items provided.
+        got: usize,
+    },
+
     /// More data was provided than expected for the requested packet list.
     ///
     /// Returned by [`SensorData::decode_packets`] when the input slice
@@ -83,6 +91,9 @@ impl fmt::Display for ProtocolError {
             }
             Self::TooManyItems { max, got } => {
                 write!(f, "too many items: max {max}, got {got}")
+            }
+            Self::TooFewItems { min, got } => {
+                write!(f, "too few items: min {min}, got {got}")
             }
             Self::UnexpectedData { trailing } => {
                 write!(f, "unexpected trailing data: {trailing} bytes not consumed")

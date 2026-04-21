@@ -105,15 +105,19 @@ pub const fn encode_drive_pwm(right_pwm: i16, left_pwm: i16) -> [u8; 5] {
 }
 
 /// Set motor states (side brush, main brush, vacuum).
-/// Bit 0: side brush, Bit 1: vacuum, Bit 2: main brush.
-/// Bits 3,4: side/main brush direction (1 = default, 0 = reverse).
+///
+/// Bit 0: side brush (1 = on), Bit 1: vacuum (1 = on), Bit 2: main brush (1 = on).
+/// Bit 3: side brush direction (1 = clockwise, 0 = counterclockwise).
+/// Bit 4: main brush direction (1 = outward, 0 = inward).
 #[inline(always)]
 pub const fn encode_motors(bits: u8) -> [u8; 2] {
     [Opcode::Motors as u8, bits]
 }
 
 /// Set motor PWM values: main brush, side brush, vacuum.
-/// Each is a signed byte (-127 to 127).
+///
+/// `main_brush` and `side_brush`: signed byte (-127 to 127).
+/// `vacuum`: unsigned byte (0 to 127); negative values are not valid per OI spec.
 #[inline(always)]
 pub const fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: i8) -> [u8; 4] {
     [
@@ -189,8 +193,8 @@ pub const fn encode_schedule(days: u8, times: [(u8, u8); 7]) -> [u8; 16] {
 
 /// Define a song. Writes into `buf` and returns the number of bytes written.
 ///
-/// `song_number`: 0-3
-/// `notes`: pairs of (MIDI note, duration_64ths). Maximum 16 notes per OI spec.
+/// `song_number`: 0–15 (Create 1 / Roomba 400) or 0–4 (Create 2).
+/// `notes`: pairs of (MIDI note, duration_64ths). Range per OI spec §5.13: 1–16 notes.
 ///
 /// Required buffer size: `3 + notes.len() * 2`
 pub fn encode_song_into(
@@ -198,6 +202,9 @@ pub fn encode_song_into(
     song_number: u8,
     notes: &[(u8, u8)],
 ) -> Result<usize, ProtocolError> {
+    if notes.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if notes.len() > 16 {
         return Err(ProtocolError::TooManyItems {
             max: 16,
@@ -223,10 +230,13 @@ pub fn encode_song_into(
 
 /// Define a song. Returns a `Vec<u8>`.
 ///
-/// `song_number`: 0-3
-/// `notes`: pairs of (MIDI note, duration_64ths). Maximum 16 notes per OI spec.
+/// `song_number`: 0–15 (Create 1 / Roomba 400) or 0–4 (Create 2).
+/// `notes`: pairs of (MIDI note, duration_64ths). Range per OI spec §5.13: 1–16 notes.
 #[cfg(feature = "alloc")]
 pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Result<Vec<u8>, ProtocolError> {
+    if notes.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if notes.len() > 16 {
         return Err(ProtocolError::TooManyItems {
             max: 16,
@@ -258,9 +268,13 @@ pub const fn encode_sensors(packet_id: u8) -> [u8; 2] {
 
 /// Request multiple sensor packets (query list). Writes into `buf`.
 ///
+/// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
 pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    if packet_ids.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if packet_ids.len() > 255 {
         return Err(ProtocolError::TooManyItems {
             max: 255,
@@ -282,9 +296,13 @@ pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize
 
 /// Request multiple sensor packets (query list). Returns a `Vec<u8>`.
 ///
+/// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
 pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    if packet_ids.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if packet_ids.len() > 255 {
         return Err(ProtocolError::TooManyItems {
             max: 255,
@@ -300,9 +318,13 @@ pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 
 /// Start a sensor stream with the given packet IDs. Writes into `buf`.
 ///
+/// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
 pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    if packet_ids.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if packet_ids.len() > 255 {
         return Err(ProtocolError::TooManyItems {
             max: 255,
@@ -324,9 +346,13 @@ pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, Pr
 
 /// Start a sensor stream with the given packet IDs. Returns a `Vec<u8>`.
 ///
+/// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
 pub fn encode_stream(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    if packet_ids.is_empty() {
+        return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
+    }
     if packet_ids.len() > 255 {
         return Err(ProtocolError::TooManyItems {
             max: 255,
@@ -514,5 +540,38 @@ mod tests {
         assert_eq!(cmd[5], 30); // Mon min
         assert_eq!(cmd[14], 10); // Sat hour
         assert_eq!(cmd[15], 0); // Sat min
+    }
+
+    #[test]
+    fn song_encode_zero_notes_rejected() {
+        assert!(matches!(
+            encode_song(0, &[]),
+            Err(ProtocolError::TooFewItems { min: 1, got: 0 })
+        ));
+    }
+
+    #[test]
+    fn song_into_zero_notes_rejected() {
+        let mut buf = [0u8; 35];
+        assert!(matches!(
+            encode_song_into(&mut buf, 0, &[]),
+            Err(ProtocolError::TooFewItems { min: 1, got: 0 })
+        ));
+    }
+
+    #[test]
+    fn query_list_empty_rejected() {
+        assert!(matches!(
+            encode_query_list(&[]),
+            Err(ProtocolError::TooFewItems { min: 1, got: 0 })
+        ));
+    }
+
+    #[test]
+    fn stream_empty_rejected() {
+        assert!(matches!(
+            encode_stream(&[]),
+            Err(ProtocolError::TooFewItems { min: 1, got: 0 })
+        ));
     }
 }

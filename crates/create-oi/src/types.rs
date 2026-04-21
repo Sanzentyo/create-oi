@@ -548,7 +548,12 @@ impl SongNote {
 
 /// Motor enable and direction bits for the MOTORS command (opcode 138).
 ///
-/// Bit layout: 0=side_brush, 1=vacuum, 2=main_brush, 3=main_brush_backward, 4=side_brush_backward.
+/// Bit layout per OI spec §5.6:
+/// - Bit 0 = side_brush (1 = on)
+/// - Bit 1 = vacuum (1 = on)
+/// - Bit 2 = main_brush (1 = on)
+/// - Bit 3 = side_brush_backward (1 = clockwise direction)
+/// - Bit 4 = main_brush_backward (1 = outward direction)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MotorBits {
     /// Enable the side brush motor.
@@ -557,21 +562,23 @@ pub struct MotorBits {
     pub vacuum: bool,
     /// Enable the main brush motor.
     pub main_brush: bool,
-    /// Reverse the main brush direction (`false` = default forward direction).
-    pub main_brush_backward: bool,
-    /// Reverse the side brush direction (`false` = default forward direction).
+    /// Reverse the side brush direction (`false` = counterclockwise, `true` = clockwise).
     pub side_brush_backward: bool,
+    /// Reverse the main brush direction (`false` = inward, `true` = outward).
+    pub main_brush_backward: bool,
 }
 
 impl MotorBits {
     /// Encode to the raw OI byte.
+    ///
+    /// Per OI spec §5.6: bit 3 = side brush direction, bit 4 = main brush direction.
     #[inline(always)]
     pub const fn to_raw(self) -> u8 {
         (self.side_brush as u8)
             | ((self.vacuum as u8) << 1)
             | ((self.main_brush as u8) << 2)
-            | ((self.main_brush_backward as u8) << 3)
-            | ((self.side_brush_backward as u8) << 4)
+            | ((self.side_brush_backward as u8) << 3)
+            | ((self.main_brush_backward as u8) << 4)
     }
 }
 
@@ -829,8 +836,29 @@ mod tests {
             main_brush_backward: true,
             side_brush_backward: true,
         };
-        // bits: 0=1, 1=0, 2=1, 3=1, 4=1 → 0b11101 = 29
+        // bits: 0=side_brush(1), 1=vacuum(0), 2=main_brush(1),
+        //       3=side_brush_backward(1), 4=main_brush_backward(1) → 0b11101 = 29
         assert_eq!(bits.to_raw(), 0b11101);
+    }
+
+    #[test]
+    fn motor_bits_side_brush_backward_is_bit3() {
+        // OI spec §5.6: bit 3 = side brush direction
+        let bits = MotorBits {
+            side_brush_backward: true,
+            ..Default::default()
+        };
+        assert_eq!(bits.to_raw(), 0b01000); // only bit 3 set = 8
+    }
+
+    #[test]
+    fn motor_bits_main_brush_backward_is_bit4() {
+        // OI spec §5.6: bit 4 = main brush direction
+        let bits = MotorBits {
+            main_brush_backward: true,
+            ..Default::default()
+        };
+        assert_eq!(bits.to_raw(), 0b10000); // only bit 4 set = 16
     }
 
     #[test]

@@ -455,6 +455,11 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 },
             ));
         }
+        if notes.is_empty() {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::TooFewItems { min: 1, got: 0 },
+            ));
+        }
         let mut raw = [(0u8, 0u8); 16];
         let count = notes.len().min(16);
         for (i, n) in notes.iter().enumerate().take(count) {

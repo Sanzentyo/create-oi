@@ -438,11 +438,24 @@ impl SensorData {
     ///
     /// Bits 1–7 are reserved and should be ignored.
     #[inline(always)]
-    pub const fn is_stasis_detected(&self) -> Option<bool> {
+    pub const fn is_making_forward_progress(&self) -> Option<bool> {
         match self.stasis {
             Some(b) => Some(b & 0x01 != 0),
             None => None,
         }
+    }
+
+    /// Returns `true` if the robot is making forward progress.
+    ///
+    /// # Deprecated
+    ///
+    /// The name "stasis_detected" is misleading — this function returns `true`
+    /// when the robot IS moving, not when it is stationary. Use
+    /// [`is_making_forward_progress`](Self::is_making_forward_progress) instead.
+    #[deprecated(since = "0.5.0", note = "use `is_making_forward_progress` instead")]
+    #[inline(always)]
+    pub const fn is_stasis_detected(&self) -> Option<bool> {
+        self.is_making_forward_progress()
     }
 
     fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), ProtocolError> {
@@ -660,15 +673,23 @@ mod tests {
         let mut sd = SensorData::default();
         // bit 0 set → forward progress detected
         sd.decode_packet(58, &[0x01]).unwrap();
-        assert_eq!(sd.is_stasis_detected(), Some(true));
+        assert_eq!(sd.is_making_forward_progress(), Some(true));
         // bit 0 clear → no forward progress
         sd.decode_packet(58, &[0x00]).unwrap();
-        assert_eq!(sd.is_stasis_detected(), Some(false));
+        assert_eq!(sd.is_making_forward_progress(), Some(false));
         // reserved bits set but bit 0 clear
         sd.decode_packet(58, &[0xFE]).unwrap();
-        assert_eq!(sd.is_stasis_detected(), Some(false));
+        assert_eq!(sd.is_making_forward_progress(), Some(false));
         // reserved bits + bit 0 → detected
         sd.decode_packet(58, &[0xFF]).unwrap();
+        assert_eq!(sd.is_making_forward_progress(), Some(true));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn stasis_deprecated_alias_works() {
+        let mut sd = SensorData::default();
+        sd.decode_packet(58, &[0x01]).unwrap();
         assert_eq!(sd.is_stasis_detected(), Some(true));
     }
 }
