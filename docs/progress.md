@@ -657,3 +657,39 @@ All 5 drive call sites in `create.rs` and 5 in `async_create.rs` updated to use 
 ### Prelude
 
 `VelocityMmPerSec`, `RadiusMm`, `WheelPwm` re-exported from `create_oi::prelude`.
+
+## Round 19 — Double-Buffer MIDI Playback
+
+### Problem
+
+With the single-slot polling approach (Round 18), each inter-chunk gap was:
+- Detection delay: 0–30 ms (30 ms poll interval)
+- `define_song` write: ~3 ms (34 bytes at 115200 baud)
+- `play_song` write: ~0.2 ms
+
+Total gap: ~33 ms per chunk. For 0.25 s chunks that is 13% silence, clearly audible as choppiness when testing with `ssg_17.mid` (656 chunks).
+
+### Solution
+
+Double-buffer architecture using 2 song slots (0 and 1):
+
+1. Pre-load `chunk[0]` into slot 0, `chunk[1]` into slot 1, then `play_song(slot 0)`
+2. For each chunk `i`, poll `SONG_PLAYING` at **5 ms** intervals
+3. On detection: `play_song(preloaded_slot)` immediately (2-byte write only, ~0.2 ms)
+4. Swap playing/preloaded slot references
+5. During the newly-started chunk's playback, `define_song(free_slot, chunks[i+2])`
+
+Gap = detection delay (0–5 ms) + `play_song` (~0.2 ms) ≈ **5 ms total** vs ~33 ms before —
+a 6.6× improvement. For 0.25 s chunks: ~2% silence instead of ~13%.
+
+### Files changed
+
+- `crates/create-oi-serial/examples/play_midi_sync.rs` — double-buffer + 5 ms poll
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs` — same (tokio async)
+- `crates/create-oi-smol/examples/play_midi_smol.rs` — same (smol async)
+
+### Edge cases handled
+
+- `n == 0`: early return before opening serial port
+- `n == 1`: no preloaded_slot setup, no swap
+- `i + 2 >= n`: skip `define_song` pre-load (nothing left to pre-load)

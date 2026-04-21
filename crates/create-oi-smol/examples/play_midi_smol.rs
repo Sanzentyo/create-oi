@@ -4,9 +4,10 @@
 //! plays them sequentially through the robot's built-in speaker.
 //!
 //! Songs are uploaded in chunks of up to 16 notes (the OI limit per song
-//! slot).  Slot 0 is reused for every chunk; the task polls the `SONG_PLAYING`
-//! sensor (packet 37) to know when each chunk has finished, rather than using
-//! a fixed timer.
+//! slot).  Two slots are alternated in a **double-buffer** pattern: while
+//! slot A is playing, slot B is already pre-loaded with the next chunk so
+//! each transition fires only the 2-byte `PLAY_SONG` command with no
+//! upload latency, reducing inter-chunk gaps from ~33 ms to ~5 ms.
 //!
 //! # Usage
 //!
@@ -18,6 +19,7 @@
 //! (`assets/midi/game-over.mid`) is used.
 
 use std::env;
+use std::mem;
 use std::time::{Duration, Instant};
 
 use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
@@ -25,7 +27,7 @@ use create_oi::prelude::*;
 use create_oi_smol::SmolTransport;
 
 /// How often to poll `SONG_PLAYING` while waiting for a chunk to finish.
-const SONG_POLL_INTERVAL: Duration = Duration::from_millis(30);
+const SONG_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// Extra timeout headroom added on top of the expected chunk duration.
 const SONG_TIMEOUT_EXTRA: Duration = Duration::from_secs(2);
 
@@ -46,7 +48,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let notes = midi_to_notes(&bytes, &MidiConfig::default())?;
         println!("{} notes parsed from MIDI file", notes.len());
         let chunks = notes_to_chunks(notes);
-        println!("{} song chunk(s) to play", chunks.len());
+        let n = chunks.len();
+        println!("{n} song chunk(s) to play");
+
+        if n == 0 {
+            return Ok(());
+        }
 
         println!("Opening {port}…");
         let transport = SmolTransport::open(&port, RobotModel::Create2)?;
@@ -54,27 +61,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let create = create.start().await.map_err(|e| e.source)?;
         let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
-        let slot = SongNumber::new(0)?;
+        let mut playing_slot = SongNumber::new(0)?;
+        let mut preloaded_slot = SongNumber::new(1)?;
 
-        for (i, chunk) in chunks.iter().enumerate() {
+        create.define_song(playing_slot, &chunks[0]).await?;
+        if n > 1 {
+            create.define_song(preloaded_slot, &chunks[1]).await?;
+        }
+        create.play_song(playing_slot).await?;
+
+        for i in 0..n {
             // Exact duration: each robot unit = 1/64 s = 15 625 µs.
             let chunk_duration = Duration::from_micros(
-                chunk
+                chunks[i]
                     .iter()
-                    .map(|n| u64::from(n.duration_64ths()) * 15_625)
+                    .map(|note| u64::from(note.duration_64ths()) * 15_625)
                     .sum::<u64>(),
             );
 
             println!(
                 "Chunk {}/{}: {} notes, {:.2}s",
                 i + 1,
-                chunks.len(),
-                chunk.len(),
+                n,
+                chunks[i].len(),
                 chunk_duration.as_secs_f64()
             );
-
-            create.define_song(slot, chunk).await?;
-            create.play_song(slot).await?;
 
             // Poll SONG_PLAYING (packet 37) until the robot signals it has finished.
             let started = Instant::now();
@@ -87,14 +98,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => {}
                 }
                 if started.elapsed() >= chunk_duration + SONG_TIMEOUT_EXTRA {
-                    eprintln!(
-                        "Warning: timed out waiting for chunk {}/{}",
-                        i + 1,
-                        chunks.len()
-                    );
+                    eprintln!("Warning: timed out on chunk {}/{}", i + 1, n);
                     break;
                 }
                 smol::Timer::after(SONG_POLL_INTERVAL).await;
+            }
+
+            if i + 1 < n {
+                mem::swap(&mut playing_slot, &mut preloaded_slot);
+                create.play_song(playing_slot).await?;
+
+                if i + 2 < n {
+                    create.define_song(preloaded_slot, &chunks[i + 2]).await?;
+                }
             }
         }
 
