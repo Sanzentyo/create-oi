@@ -269,9 +269,9 @@ fn stop_sends_zero_drive() {
     create.stop().unwrap();
 
     let written = create.transport().written_bytes();
-    // Last 5 bytes should be DRIVE(137) + 0,0,0,0
+    // Last 5 bytes should be DRIVE_DIRECT(145) + 0,0,0,0
     let drive_cmd = &written[written.len() - 5..];
-    assert_eq!(drive_cmd, &[137, 0, 0, 0, 0]);
+    assert_eq!(drive_cmd, &[145, 0, 0, 0, 0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -710,4 +710,137 @@ fn set_digit_leds_accepts_printable_ascii() {
 
     // All printable ASCII: space (32) through tilde (126)
     create.set_digit_leds(b'1', b'2', b'3', b'4').unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Create 2–only model gate tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn drive_pwm_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .drive_pwm(
+            MotorPower::try_from(0.5).unwrap(),
+            MotorPower::try_from(-0.5).unwrap(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected Validation error, got {err:?}"
+    );
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn drive_pwm_rejects_roomba400_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Roomba400);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .drive_pwm(
+            MotorPower::try_from(0.0).unwrap(),
+            MotorPower::try_from(0.0).unwrap(),
+        )
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_motors_pwm_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.set_motors_pwm(0, 0, 0).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_digit_leds_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.set_digit_leds(b'A', b'B', b'C', b'D').unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_digit_leds_raw_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_digit_leds_raw(0xFF, 0x00, 0xFF, 0x00)
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn simulate_buttons_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.simulate_buttons(ButtonBits::default()).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_schedule_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_schedule(
+            0b0000001,
+            [(8, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_date_rejects_create1_before_send() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.set_date(DayOfWeek::Monday, 10, 30).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// reset() available in Off mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reset_available_in_off_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    // reset() is available before start() — the OI spec allows RESET at any time
+    let transport = create.reset().unwrap();
+    assert_eq!(transport.written_bytes(), &[7]); // OPCODE 7 = RESET
 }

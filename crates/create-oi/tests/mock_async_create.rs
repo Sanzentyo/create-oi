@@ -261,7 +261,7 @@ async fn async_stop_sends_zero_drive() {
 
     let written = create.transport().written_bytes();
     let drive_cmd = &written[written.len() - 5..];
-    assert_eq!(drive_cmd, &[137, 0, 0, 0, 0]);
+    assert_eq!(drive_cmd, &[145, 0, 0, 0, 0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -680,4 +680,149 @@ async fn async_set_digit_leds_accepts_printable_ascii() {
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
 
     create.set_digit_leds(b'1', b'2', b'3', b'4').await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Create 2–only model gate tests (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_drive_pwm_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .drive_pwm(
+            MotorPower::try_from(0.5).unwrap(),
+            MotorPower::try_from(-0.5).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected Validation error, got {err:?}"
+    );
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_drive_pwm_rejects_roomba400_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Roomba400);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .drive_pwm(
+            MotorPower::try_from(0.0).unwrap(),
+            MotorPower::try_from(0.0).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_motors_pwm_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.set_motors_pwm(0, 0, 0).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_digit_leds_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_digit_leds(b'A', b'B', b'C', b'D')
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_digit_leds_raw_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_digit_leds_raw(0xFF, 0x00, 0xFF, 0x00)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_simulate_buttons_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .simulate_buttons(ButtonBits::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_schedule_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_schedule(
+            0b0000001,
+            [(8, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_date_rejects_create1_before_send() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let mut create = create.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create
+        .set_date(DayOfWeek::Monday, 10, 30)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// reset() available in Off mode (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_reset_available_in_off_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let transport = create.reset().await.unwrap();
+    assert_eq!(transport.written_bytes(), &[7]); // OPCODE 7 = RESET
 }

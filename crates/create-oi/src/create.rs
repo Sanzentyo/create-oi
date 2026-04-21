@@ -68,6 +68,20 @@ impl<T: Transport> Create<Off, T> {
         self.sleep_mode_change();
         Ok(self.transition())
     }
+
+    /// Soft-reset the robot. Available in all modes per the OI spec, including Off.
+    ///
+    /// After this call the robot reboots. The serial connection may need to be
+    /// re-opened before creating a new `Create::<Off, _>::new(transport, model)`.
+    pub fn reset(mut self) -> Result<T, ConnectError<T, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_reset()) {
+            return Err(ConnectError {
+                transport: self.transport,
+                source: e,
+            });
+        }
+        Ok(self.transport)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -514,17 +528,26 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     }
 
     /// Drive wheels with PWM values.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 146 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn drive_pwm(
         &mut self,
         right: MotorPower,
         left: MotorPower,
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "drive_pwm (OPCODE 146) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         self.send_cmd(&command::encode_drive_pwm(right.to_pwm(), left.to_pwm()))
     }
 
-    /// Stop all motors (drive 0, 0).
+    /// Stop all motors (both wheels to 0 mm/s).
     pub fn stop(&mut self) -> Result<(), Error<std::io::Error>> {
-        self.send_cmd(&command::encode_drive(0, 0))
+        self.send_cmd(&command::encode_drive_direct(0, 0))
     }
 
     /// Set LEDs.
@@ -546,6 +569,9 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     ///
     /// Each character must be a printable ASCII byte (32–126). Non-printable
     /// bytes are rejected before any bytes are sent to the robot.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 164 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn set_digit_leds(
         &mut self,
         d3: u8,
@@ -553,6 +579,12 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         d1: u8,
         d0: u8,
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_digit_leds (OPCODE 164) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         for (name, val) in [("d3", d3), ("d2", d2), ("d1", d1), ("d0", d0)] {
             if !(32..=126).contains(&val) {
                 return Err(Error::Validation(ValidationError {
@@ -570,12 +602,21 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     ///   Positive = forward direction, negative = reverse.
     /// - `vacuum`: range 0..=127. Negative values are invalid per the OI spec
     ///   (vacuum runs in one direction only) and are rejected without sending.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 144 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn set_motors_pwm(
         &mut self,
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_motors_pwm (OPCODE 144) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         for (name, val) in [("main_brush", main_brush), ("side_brush", side_brush)] {
             if val == i8::MIN {
                 return Err(Error::Validation(ValidationError {
@@ -602,6 +643,9 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     ///
     /// Each byte controls one digit: bits 0–6 = segments A–G, bit 7 = decimal point.
     /// `d3` is the leftmost digit and `d0` is the rightmost.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 163 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn set_digit_leds_raw(
         &mut self,
         d3: u8,
@@ -609,6 +653,12 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         d1: u8,
         d0: u8,
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_digit_leds_raw (OPCODE 163) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         self.send_cmd(&command::encode_digit_leds_raw(d3, d2, d1, d0))
     }
 
@@ -636,19 +686,37 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
 
 impl<M: FullControl, T: Transport> Create<M, T> {
     /// Simulate button presses on the robot (Full mode only).
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 165 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn simulate_buttons(&mut self, buttons: ButtonBits) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "simulate_buttons (OPCODE 165) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         self.send_cmd(&command::encode_buttons(buttons.to_raw()))
     }
 
     /// Set the robot's internal date and time (Full mode only).
     ///
     /// Returns an error if `hour` is not 0–23 or `minute` is not 0–59.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 168 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn set_date(
         &mut self,
         day: DayOfWeek,
         hour: u8,
         minute: u8,
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_date (OPCODE 168) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         if hour > 23 {
             return Err(Error::Validation(ValidationError {
                 field: "hour",
@@ -670,11 +738,20 @@ impl<M: FullControl, T: Transport> Create<M, T> {
     /// `times`: (hour, minute) for each day, starting with Sunday.
     ///
     /// Returns an error if `days` has reserved bits set or any time is out of range.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 167 is
+    /// not supported on Create 1 or Roomba 400).
     pub fn set_schedule(
         &mut self,
         days: u8,
         times: [(u8, u8); 7],
     ) -> Result<(), Error<std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_schedule (OPCODE 167) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
         if days & !0x7F != 0 {
             return Err(Error::Validation(ValidationError {
                 field: "days",
@@ -710,7 +787,15 @@ impl<M: Mode, T: Transport> Create<M, T> {
         self.model
     }
 
-    /// Consume the robot and return the underlying transport.
+    /// Consume the robot handle and return the underlying transport.
+    ///
+    /// # Note on robot state
+    ///
+    /// Dropping the returned transport (or this `Create` handle directly) does
+    /// **not** send any stop or shutdown command to the robot. The robot will
+    /// continue executing the last commanded motion indefinitely. Call
+    /// [`stop()`](crate::mode::Actuatable) or [`power_off()`](crate::mode::SensorReadable)
+    /// before releasing the handle if safe shutdown is needed.
     #[must_use]
     pub fn into_transport(self) -> T {
         self.transport
@@ -724,16 +809,9 @@ impl<M: Mode, T: Transport> Create<M, T> {
 
     /// Borrow the underlying transport mutably.
     ///
-    /// # Caution
+    /// # Warning
     ///
-    /// Directly writing to or reading from the transport bypasses both the
-    /// TypeState mode invariants and the internal [`StreamParser`] state.
-    /// Only use this for low-level diagnostics or protocol extensions where
-    /// you can guarantee correctness externally.
-    pub fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
-    }
-
+    /// Direct transport access bypasses the TypeState mode invariants, the
     /// Send raw bytes to the robot.
     fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<std::io::Error>> {
         self.transport.write_all(data).map_err(Error::Io)?;

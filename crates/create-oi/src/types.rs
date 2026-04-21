@@ -135,6 +135,18 @@ impl RobotModel {
         }
     }
 
+    /// Whether this model supports Create 2–specific opcodes.
+    ///
+    /// Returns `true` only for [`RobotModel::Create2`]. Several OI opcodes
+    /// (DRIVE_PWM 146, MOTORS_PWM 144, DIGIT_LEDS_RAW 163, DIGIT_LEDS_ASCII 164,
+    /// BUTTONS 165, SCHEDULE 167, SET_DAY_TIME 168) were introduced with the
+    /// Create 2 / Roomba 600+ firmware and are not available on Create 1 or
+    /// Roomba 400 series hardware.
+    #[inline(always)]
+    pub const fn is_create2(self) -> bool {
+        matches!(self, Self::Create2)
+    }
+
     /// Maximum song slot index (0..=max, inclusive) for this model.
     ///
     /// - Create 2: 5 slots (0–4)
