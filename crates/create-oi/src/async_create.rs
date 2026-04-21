@@ -418,23 +418,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[cfg(feature = "alloc")]
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
-        self.reject_if_streaming()?;
-        if !self.model.supports_query_list() {
-            return Err(Error::Validation(ValidationError {
-                field: "model",
-                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
-            }));
-        }
-        if sensor::has_duplicate_ids(packet_ids) {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "duplicate packet IDs are not allowed in query_list",
-            }));
-        }
-        for &id in packet_ids {
-            self.validate_packet_id(id)?;
-        }
-        let expected_len = sensor::expected_data_len(packet_ids)?;
+        let expected_len = self.validate_query_list_common(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd).await?;
 
@@ -453,22 +437,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[cfg(not(feature = "alloc"))]
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
-        self.reject_if_streaming()?;
-        if !self.model.supports_query_list() {
-            return Err(Error::Validation(ValidationError {
-                field: "model",
-                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
-            }));
-        }
-        if sensor::has_duplicate_ids(packet_ids) {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "duplicate packet IDs are not allowed in query_list",
-            }));
-        }
-        for &id in packet_ids {
-            self.validate_packet_id(id)?;
-        }
+        let expected_len = self.validate_query_list_common(packet_ids)?;
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
             return Err(Error::Validation(ValidationError {
@@ -476,7 +445,6 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "async query_list supports at most 52 packet IDs without alloc; enable the alloc feature for longer lists",
             }));
         }
-        let expected_len = sensor::expected_data_len(packet_ids)?;
         const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut cmd_buf = [0u8; MAX_CMD];
         let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
@@ -514,42 +482,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// to 52 IDs (the size of Group-100).
     #[cfg(feature = "alloc")]
     pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
-        if !self.model.supports_stream() {
-            return Err(Error::Validation(ValidationError {
-                field: "stream",
-                reason: "sensor streaming is not supported by this robot model",
-            }));
-        }
-        if sensor::has_duplicate_ids(packet_ids) {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "duplicate packet IDs are not allowed in start_stream",
-            }));
-        }
-        for &id in packet_ids {
-            self.validate_packet_id(id)?;
-        }
-        let payload_bytes =
-            packet_ids
-                .iter()
-                .try_fold(0usize, |acc, &id| -> Result<usize, Error<T::Error>> {
-                    if let Some(info) = create_oi_protocol::opcode::packet_info(id) {
-                        Ok(acc + 1 + info.len as usize)
-                    } else if let Some(members) = create_oi_protocol::opcode::group_packet_ids(id) {
-                        let data_len = create_oi_protocol::opcode::group_data_len(id).unwrap_or(0);
-                        Ok(acc + members.len() + data_len)
-                    } else {
-                        Err(Error::Protocol(
-                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
-                        ))
-                    }
-                })?;
-        if payload_bytes > 255 {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "stream payload per cycle exceeds OI limit of 255 bytes",
-            }));
-        }
+        self.validate_stream_init_params(packet_ids)?;
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd).await?;
         self.streaming = true;
@@ -562,42 +495,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Enable the `alloc` feature to remove this limit.
     #[cfg(not(feature = "alloc"))]
     pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
-        if !self.model.supports_stream() {
-            return Err(Error::Validation(ValidationError {
-                field: "stream",
-                reason: "sensor streaming is not supported by this robot model",
-            }));
-        }
-        if sensor::has_duplicate_ids(packet_ids) {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "duplicate packet IDs are not allowed in start_stream",
-            }));
-        }
-        for &id in packet_ids {
-            self.validate_packet_id(id)?;
-        }
-        let payload_bytes =
-            packet_ids
-                .iter()
-                .try_fold(0usize, |acc, &id| -> Result<usize, Error<T::Error>> {
-                    if let Some(info) = create_oi_protocol::opcode::packet_info(id) {
-                        Ok(acc + 1 + info.len as usize)
-                    } else if let Some(members) = create_oi_protocol::opcode::group_packet_ids(id) {
-                        let data_len = create_oi_protocol::opcode::group_data_len(id).unwrap_or(0);
-                        Ok(acc + members.len() + data_len)
-                    } else {
-                        Err(Error::Protocol(
-                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
-                        ))
-                    }
-                })?;
-        if payload_bytes > 255 {
-            return Err(Error::Validation(ValidationError {
-                field: "packet_ids",
-                reason: "stream payload per cycle exceeds OI limit of 255 bytes",
-            }));
-        }
+        self.validate_stream_init_params(packet_ids)?;
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
             return Err(Error::Validation(ValidationError {
@@ -616,6 +514,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Pause or resume the sensor stream.
     ///
     /// Returns an error if this robot model does not support sensor streaming.
+    #[must_use = "result must be checked"]
     pub async fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<T::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
@@ -1228,6 +1127,74 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     /// # Warning
     ///
     /// Direct transport access bypasses the TypeState mode invariants, the
+    /// Validates parameters common to both alloc and no-alloc `start_stream` variants.
+    ///
+    /// Checks: model supports streaming, no duplicate IDs, all IDs valid for this model,
+    /// total per-cycle payload ≤ 255 bytes.  Returns `Ok(())` on success.
+    fn validate_stream_init_params(&self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in start_stream",
+            }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
+        }
+        let payload_bytes =
+            packet_ids
+                .iter()
+                .try_fold(0usize, |acc, &id| -> Result<usize, Error<T::Error>> {
+                    if let Some(info) = create_oi_protocol::opcode::packet_info(id) {
+                        Ok(acc + 1 + info.len as usize)
+                    } else if let Some(members) = create_oi_protocol::opcode::group_packet_ids(id) {
+                        let data_len = create_oi_protocol::opcode::group_data_len(id).unwrap_or(0);
+                        Ok(acc + members.len() + data_len)
+                    } else {
+                        Err(Error::Protocol(
+                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                        ))
+                    }
+                })?;
+        if payload_bytes > 255 {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "stream payload per cycle exceeds OI limit of 255 bytes",
+            }));
+        }
+        Ok(())
+    }
+
+    /// Validates parameters common to both alloc and no-alloc `query_list` variants.
+    ///
+    /// Checks: not currently streaming, model supports query_list, no duplicate IDs,
+    /// all IDs valid for this model.  Returns the expected total response data length.
+    fn validate_query_list_common(&self, packet_ids: &[u8]) -> Result<usize, Error<T::Error>> {
+        self.reject_if_streaming()?;
+        if !self.model.supports_query_list() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
+            }));
+        }
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in query_list",
+            }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
+        }
+        Ok(sensor::expected_data_len(packet_ids)?)
+    }
+
     fn reject_if_streaming(&self) -> Result<(), Error<T::Error>> {
         if self.streaming {
             return Err(Error::Validation(ValidationError {

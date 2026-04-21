@@ -1240,3 +1240,21 @@ After all chunks finish, `--led-sync` clears both outputs before `to_passive()`:
 - `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
 - `cargo fmt --all`: applied
 - `just check-nostd`: all 4 no_std / embedded builds pass
+
+## Round 31 — Code quality fixes
+
+**Issues addressed:**
+
+1. **Version alignment** — `create-oi-serial` bumped from 0.3.0 → 0.4.0 to match all other publishable crates.
+
+2. **`#[must_use]` on `toggle_stream`** — Both `Create::toggle_stream` (`create.rs`) and `AsyncCreate::toggle_stream` (`async_create.rs`) now carry `#[must_use = "result must be checked"]`, preventing silent error discard.
+
+3. **Eliminated duplication in `async_create.rs`** — Two private validation helpers extracted:
+   - `validate_stream_init_params(&self, packet_ids)` — checks `supports_stream`, no duplicates, valid IDs, payload ≤ 255 bytes.  Used by both alloc and no-alloc `start_stream`; alloc-only limit / stack-buffer encoding remain in each variant.
+   - `validate_query_list_common(&self, packet_ids)` — checks `reject_if_streaming`, `supports_query_list`, no duplicates, valid IDs; returns `expected_len`.  Used by both alloc and no-alloc `query_list`.
+
+**Verification:**
+- `cargo test --workspace --features midi`: all tests pass (363)
+- `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
+- `cargo fmt --all`: clean
+- `just check-nostd`: all 4 no_std / embedded builds pass

@@ -489,6 +489,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// Returns an error if this robot model does not support sensor streaming.
     /// Updates the internal streaming flag (`enable = false` allows sensor queries again).
+    #[must_use = "result must be checked"]
     pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
