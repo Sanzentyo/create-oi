@@ -160,4 +160,21 @@
   - **Doc comment updates**: "Synchronous/Asynchronous robot API" → "…Create API"; struct docs updated; transport crates "for the robot" → "for the Create/Roomba"; hardware-describing comments kept as-is
   - Commit: `e23c4fd`
 
+- [x] **Round 7 — Exploratory 3-duck audit + validation bypass fixes**:
+  - **3 rubber-duck agents** ran a parallel exploratory audit (API design, protocol, transport).
+  - **Bug fix (HIGH)**: `Radius::Curve(f32)` was a public enum variant, allowing `Radius::Curve(f32::NAN)` to bypass `Radius::new()` validation. Fixed by introducing an opaque `CurveRadius` newtype with a private `f32` field; `Radius::Curve(CurveRadius)` is now only constructable via `Radius::new()`. `CurveRadius` is exported from the prelude; pattern-matching still works via `r.as_meters()`.
+  - **Bug fix (HIGH)**: `SongNote.midi_note` and `.duration_64ths` were `pub` fields, allowing struct-literal construction that bypassed the 31–127 MIDI range check. Fields are now private; `pub const fn midi_note(self) -> u8` and `duration_64ths(self) -> u8` accessors added.
+  - **Bug fix (MED)**: `Radius::new(0.0)` was accepted (rounds to 0 mm, not a valid OI arc radius). Now returns `ValidationError` with a clear message distinct from the ±1/32767 special-value rejections. Any value rounding to 0 mm is rejected.
+  - **Bug fix (MED)**: `SerialTransport::close()` only flushed, leaving the port open. Refactored to `Option<Box<dyn SerialPort>>`; `close()` calls `take()`, flushing and dropping the OS handle. Subsequent `read`/`write_all` calls return `io::ErrorKind::NotConnected`. `close()` is idempotent.
+  - **New tests**: `radius_zero_rejected`, `radius_smallest_valid_curve`, `song_note_accessors`, `song_note_invalid_midi`, `curve_radius_as_meters` (+5).
+  - Commit: `9dfe1b7`
+
+### Test Summary (Round 7)
+- 56 unit tests (protocol)
+- 41 unit tests (types + control, +5 from Round 7)
+- 36 sync mock integration tests
+- 35 async mock integration tests
+- 1 protocol doc test
+- Total: **168 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅ | commit `9dfe1b7`
+
 ### Remaining
