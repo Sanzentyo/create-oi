@@ -54,6 +54,8 @@
 // for recovery, making them large. This is by design.
 #![allow(clippy::result_large_err)]
 
+extern crate alloc;
+
 pub mod async_create;
 #[cfg(feature = "std")]
 pub mod create;

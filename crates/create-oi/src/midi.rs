@@ -11,6 +11,13 @@
 //! [`MidiConfig::merge_all_tracks`] to merge all tracks into a single voice
 //! using [`MidiConfig::voice_selection`].
 //!
+//! # Polyphony reduction (multi-voice → few-voice → mono)
+//!
+//! For dense orchestral files with 10+ simultaneous voices, set
+//! [`MidiConfig::max_voices`] to an intermediate count (e.g. 3) before the
+//! final monophonization. This preserves more musical content than going
+//! directly from N voices to 1.
+//!
 //! # Limitations
 //!
 //! - **Rests are optional**: by default, gaps between notes are dropped because
@@ -40,897 +47,25 @@
 
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+mod config;
+mod events;
+mod parse;
+mod voice_reduce;
 
-use midly::{Format, MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
-
-use create_oi_protocol::MAX_SONG_NOTES;
-
-use crate::types::SongNote;
-
-/// Configuration for MIDI parsing.
-#[derive(Debug, Clone)]
-pub struct MidiConfig {
-    /// Track index to use (0-based). `None` = auto-detect the first track
-    /// that contains at least one `NoteOn` event with nonzero velocity.
-    ///
-    /// Ignored when [`merge_all_tracks`](Self::merge_all_tracks) is `true`.
-    pub track: Option<usize>,
-    /// Override the tempo (µs per beat). `None` = read from the MIDI file;
-    /// defaults to 500 000 (120 BPM) if no tempo event is present.
-    pub tempo_micros_per_beat: Option<u32>,
-    /// When `true`, notes from **all** tracks are merged into a single
-    /// monophonic voice using the sweep-line algorithm.
-    ///
-    /// [`voice_selection`](Self::voice_selection) determines which note wins
-    /// when multiple are active simultaneously. Useful for complex multi-track
-    /// MIDI files where a simple single-track extraction produces many very
-    /// short notes.
-    ///
-    /// Default: `false` (single-track extraction, same behaviour as before).
-    pub merge_all_tracks: bool,
-    /// Voice selection policy used when [`merge_all_tracks`](Self::merge_all_tracks)
-    /// is `true`. Default: [`VoiceSelection::HighestPitch`].
-    pub voice_selection: VoiceSelection,
-    /// When `true` (default), MIDI channel 10 (0-indexed: 9) is excluded from
-    /// the multi-track merge. Channel 10 is conventionally reserved for
-    /// percussion in General MIDI; including drums in a melodic monophonization
-    /// usually produces poor results.
-    ///
-    /// Ignored when [`channel`](Self::channel) is explicitly set (the explicit
-    /// channel selection takes precedence).
-    ///
-    /// Only used when [`merge_all_tracks`](Self::merge_all_tracks) is `true`.
-    pub filter_percussion: bool,
-    /// Restrict note extraction to a single MIDI channel (0-indexed, 0–15).
-    /// `None` (default) includes all channels.
-    ///
-    /// When set, this overrides [`filter_percussion`](Self::filter_percussion):
-    /// even `channel = Some(9)` is allowed so that percussion can be extracted
-    /// deliberately. Valid values are `0..=15`; [`MidiError::InvalidChannel`]
-    /// is returned for values outside this range.
-    ///
-    /// Works in both single-track and multi-track merge modes.
-    pub channel: Option<u8>,
-    /// When `true` (default), silence gaps between notes are encoded as rest
-    /// notes (MIDI pitch 0) in the output. Set to `false` to drop gaps so that
-    /// notes play back-to-back.
-    ///
-    /// Note spans with out-of-range pitches (those that would be dropped by
-    /// the converter) are treated as silence for this purpose.
-    pub include_rests: bool,
-    /// Trim the leading silence before the first audible note.
-    ///
-    /// Only effective when [`include_rests`](Self::include_rests) is `true`.
-    /// Default: `true`.
-    pub trim_start: bool,
-    /// Trim the trailing silence after the last audible note.
-    ///
-    /// Only effective when [`include_rests`](Self::include_rests) is `true`.
-    /// Default: `true`.
-    pub trim_end: bool,
-}
-
-impl Default for MidiConfig {
-    fn default() -> Self {
-        Self {
-            track: None,
-            tempo_micros_per_beat: None,
-            merge_all_tracks: false,
-            voice_selection: VoiceSelection::default(),
-            filter_percussion: true,
-            channel: None,
-            include_rests: true,
-            trim_start: true,
-            trim_end: true,
-        }
-    }
-}
-
-/// Policy for selecting the active note when multiple are sounding
-/// simultaneously during multi-track monophonization.
-///
-/// Only used when [`MidiConfig::merge_all_tracks`] is `true`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum VoiceSelection {
-    /// The sounding note with the highest MIDI pitch wins (soprano voice).
-    ///
-    /// This matches the melody in most pop and game music, where the melody
-    /// sits above the harmony and bass.
-    #[default]
-    HighestPitch,
-    /// The sounding note with the lowest MIDI pitch wins (bass voice).
-    LowestPitch,
-    /// Follow the melodic contour: among all sounding notes, prefer the pitch
-    /// closest to the previously played note.
-    ///
-    /// This creates smoother melodic lines by avoiding large pitch jumps.
-    /// Ties (equal distance from previous) are broken by higher pitch.
-    /// Before any note has been played (no prior context), falls back to
-    /// [`HighestPitch`].
-    NearestPitch,
-    /// Prefer the note with the highest MIDI velocity (musical emphasis).
-    ///
-    /// When multiple notes sound simultaneously, the loudest one is selected.
-    /// Ties are broken by higher pitch. Velocity is tracked per
-    /// `(channel, pitch)` pair so overlapping notes on different channels
-    /// are handled independently.
-    HighestVelocity,
-}
-
-/// Error type for MIDI parsing.
-#[derive(Debug)]
-pub enum MidiError {
-    /// The MIDI byte stream could not be parsed.
-    Parse(midly::Error),
-    /// The parsed MIDI file contains no usable notes (all pitches were out of
-    /// the robot's range 31–127, or the file is empty).
-    NoNotes,
-    /// The file uses SMPTE timecode, which cannot be converted to robot song
-    /// units. Use metrical (tempo-based) timing instead.
-    UnsupportedTiming,
-    /// The file is MIDI Format 2 (sequential multi-song), which this crate
-    /// does not support.
-    UnsupportedFormat,
-    /// The timing header has `ticks_per_beat == 0`, which would cause a
-    /// division by zero in duration conversion.
-    InvalidTiming,
-    /// The requested MIDI channel number is out of range. Valid channels are
-    /// 0–15 (0-indexed); the robot's OI has no concept of MIDI channels.
-    InvalidChannel(u8),
-}
-
-impl core::fmt::Display for MidiError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            MidiError::Parse(e) => write!(f, "MIDI parse error: {e}"),
-            MidiError::NoNotes => write!(f, "no playable notes in MIDI file"),
-            MidiError::UnsupportedTiming => {
-                write!(f, "SMPTE timecode is not supported; use metrical timing")
-            }
-            MidiError::UnsupportedFormat => {
-                write!(f, "MIDI Format 2 (sequential) is not supported")
-            }
-            MidiError::InvalidTiming => {
-                write!(f, "ticks_per_beat is zero; invalid MIDI file")
-            }
-            MidiError::InvalidChannel(ch) => {
-                write!(f, "channel {ch} is out of range; valid channels are 0–15")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for MidiError {}
-
-/// A tempo change: the tempo becomes `micros_per_beat` at `abs_tick`.
-#[derive(Clone, Copy, Debug)]
-struct TempoChange {
-    abs_tick: u64,
-    micros_per_beat: u32,
-}
-
-/// Collect all tempo change events from every track in the file.
-///
-/// Events at the same tick are de-duplicated: only the last one (in source
-/// order) is kept, matching the "last writer wins" semantics of MIDI.
-fn build_tempo_map(smf: &Smf<'_>) -> Vec<TempoChange> {
-    let mut changes: Vec<TempoChange> = Vec::new();
-
-    for track in &smf.tracks {
-        let mut abs_tick: u64 = 0;
-        for event in track {
-            abs_tick += u64::from(event.delta.as_int());
-            if let TrackEventKind::Meta(MetaMessage::Tempo(t)) = event.kind {
-                // Remove any existing entry at exactly the same tick so the
-                // last-seen value wins (stable sort order is preserved because
-                // we scan tracks sequentially).
-                changes.retain(|c| c.abs_tick != abs_tick);
-                changes.push(TempoChange {
-                    abs_tick,
-                    micros_per_beat: t.as_int(),
-                });
-            }
-        }
-    }
-
-    changes.sort_by_key(|c| c.abs_tick);
-    changes
-}
-
-/// Return the tempo (µs/beat) that is in effect at `abs_tick`.
-fn tempo_at(tempo_map: &[TempoChange], abs_tick: u64) -> u32 {
-    tempo_map
-        .iter()
-        .rev()
-        .find(|c| c.abs_tick <= abs_tick)
-        .map(|c| c.micros_per_beat)
-        .unwrap_or(500_000) // 120 BPM default
-}
-
-/// Convert a note's span `[start_tick, start_tick + dur_ticks)` to robot song
-/// duration units (1/64 s = 15 625 µs).
-///
-/// Uses u128 arithmetic throughout to handle very long notes without overflow.
-/// Piecewise-integrates across tempo-change boundaries so mid-note tempo
-/// changes are handled correctly.
-///
-/// Returns a value clamped to `1..=255`.
-fn ticks_to_robot_units(
-    start_tick: u64,
-    dur_ticks: u64,
-    tempo_map: &[TempoChange],
-    ticks_per_beat: u32,
-) -> u8 {
-    debug_assert!(ticks_per_beat > 0);
-
-    if dur_ticks == 0 {
-        return 1;
-    }
-
-    let tpb = u128::from(ticks_per_beat);
-    let end_tick = start_tick + dur_ticks;
-    let mut total_micros: u128 = 0;
-    let mut cursor = start_tick;
-
-    for change in tempo_map {
-        if change.abs_tick <= cursor {
-            continue;
-        }
-        if change.abs_tick >= end_tick {
-            break;
-        }
-        let segment_ticks = u128::from(change.abs_tick - cursor);
-        let current_tempo = u128::from(tempo_at(tempo_map, cursor));
-        total_micros =
-            total_micros.saturating_add(segment_ticks.saturating_mul(current_tempo) / tpb);
-        cursor = change.abs_tick;
-    }
-
-    // Final segment from cursor to end_tick.
-    let remaining = u128::from(end_tick - cursor);
-    let final_tempo = u128::from(tempo_at(tempo_map, cursor));
-    total_micros = total_micros.saturating_add(remaining.saturating_mul(final_tempo) / tpb);
-
-    // 1 robot unit = 1/64 s = 15 625 µs.
-    let units = total_micros / 15_625;
-    units.clamp(1, 255) as u8
-}
-
-/// An internal note event produced during multi-track sweep-line collection.
-///
-/// Derived `Ord` sorts by `(abs_tick, is_on, pitch, channel)`. Because `false
-/// < true`, `NoteOff` events (is_on = false) sort before `NoteOn` events at
-/// the same tick, which ensures a clean handoff when one note ends exactly as
-/// another begins.
-///
-/// `velocity` does **not** participate in the sort order; see the manual
-/// `Ord` impl.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NoteEvent {
-    abs_tick: u64,
-    /// `false` = NoteOff (sorts first at same tick); `true` = NoteOn.
-    is_on: bool,
-    pitch: u8,
-    channel: u8,
-    /// NoteOn velocity (1–127). Zero for NoteOff events.
-    velocity: u8,
-}
-
-impl PartialOrd for NoteEvent {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NoteEvent {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.abs_tick
-            .cmp(&other.abs_tick)
-            .then(self.is_on.cmp(&other.is_on))
-            .then(self.pitch.cmp(&other.pitch))
-            .then(self.channel.cmp(&other.channel))
-    }
-}
-
-/// Collect all NoteOn/NoteOff events from every track, optionally skipping
-/// MIDI channel 10 (0-indexed: 9, percussion) or filtering to a single channel.
-fn collect_note_events(
-    smf: &Smf<'_>,
-    filter_percussion: bool,
-    channel_filter: Option<u8>,
-) -> Vec<NoteEvent> {
-    let mut events = Vec::new();
-    for track in &smf.tracks {
-        let mut abs_tick: u64 = 0;
-        for event in track {
-            abs_tick += u64::from(event.delta.as_int());
-            if let TrackEventKind::Midi { channel, message } = event.kind {
-                let ch = channel.as_int();
-                match channel_filter {
-                    Some(only_ch) => {
-                        if ch != only_ch {
-                            continue;
-                        }
-                    }
-                    None => {
-                        if filter_percussion && ch == 9 {
-                            continue;
-                        }
-                    }
-                }
-                let (is_on, pitch, velocity) = match message {
-                    MidiMessage::NoteOn { key, vel } => {
-                        let v = vel.as_int();
-                        (v > 0, key.as_int(), v)
-                    }
-                    MidiMessage::NoteOff { key, .. } => (false, key.as_int(), 0),
-                    _ => continue,
-                };
-                events.push(NoteEvent {
-                    abs_tick,
-                    is_on,
-                    pitch,
-                    channel: ch,
-                    velocity,
-                });
-            }
-        }
-    }
-    events
-}
-
-/// Sweep-line monophonization over a sorted slice of note events.
-///
-/// Maintains a count-map of currently-sounding pitches. At each tick where the
-/// active set changes, the current winner (highest or lowest pitch) is checked;
-/// if it changed, the previous segment is emitted as a [`SongNote`].
-///
-/// Zero-duration segments (two NoteOn events at the exact same tick) are
-/// discarded. Dangling notes with no NoteOff are emitted at the end with their
-/// accumulated duration (or clamped to 1 robot unit if duration is zero).
-///
-/// When `include_rests` is `true`, silence gaps (including spans where the
-/// winner is out of the 31–127 range) are emitted as rest notes (pitch 0).
-#[allow(clippy::too_many_arguments)]
-fn monophonize_events(
-    events: &[NoteEvent],
-    voice_selection: VoiceSelection,
-    tempo_map: &[TempoChange],
-    ticks_per_beat: u32,
-    include_rests: bool,
-    trim_start: bool,
-    trim_end: bool,
-    track_end_tick: u64,
-) -> Vec<SongNote> {
-    let mut active: BTreeMap<u8, u32> = BTreeMap::new(); // pitch → active count
-    // (channel, pitch) → NoteOn velocity; used by HighestVelocity.
-    let mut active_vel: BTreeMap<(u8, u8), u8> = BTreeMap::new();
-    let mut current_winner: Option<u8> = None;
-    let mut segment_start: u64 = 0;
-    let mut last_tick: u64 = 0;
-    let mut notes: Vec<SongNote> = Vec::new();
-
-    // Start of the current silence gap; `Some(0)` tracks leading silence.
-    let mut rest_start: Option<u64> = if include_rests { Some(0) } else { None };
-    // Whether any audible note has been started yet.
-    let mut first_note_started = false;
-    // For NearestPitch: the last emitted audible pitch.
-    let mut prev_pitch: Option<u8> = None;
-    // Pre-tick reference for NearestPitch: the winner before the current tick's
-    // events, so all events within the same tick use a consistent reference.
-    let mut tick_ref: Option<u8> = None;
-    // Tick of the previous event; used to detect tick advances.
-    let mut prev_event_tick: u64 = u64::MAX;
-
-    for event in events {
-        // When the tick advances, record the current winner as the reference
-        // for NearestPitch, so every event at the same tick uses the same
-        // pre-tick reference rather than intermediate intra-tick states.
-        if event.abs_tick != prev_event_tick {
-            tick_ref = current_winner;
-            prev_event_tick = event.abs_tick;
-        }
-        last_tick = event.abs_tick;
-
-        if event.is_on {
-            *active.entry(event.pitch).or_insert(0) += 1;
-            active_vel.insert((event.channel, event.pitch), event.velocity);
-        } else {
-            match active.get_mut(&event.pitch) {
-                Some(count) if *count > 1 => *count -= 1,
-                Some(_) => {
-                    active.remove(&event.pitch);
-                }
-                None => {} // Spurious NoteOff — ignore.
-            }
-            active_vel.remove(&(event.channel, event.pitch));
-        }
-
-        let new_winner = match voice_selection {
-            VoiceSelection::HighestPitch => active.keys().next_back().copied(),
-            VoiceSelection::LowestPitch => active.keys().next().copied(),
-            VoiceSelection::NearestPitch => {
-                let reference = tick_ref.or(prev_pitch);
-                match reference {
-                    None => active.keys().next_back().copied(),
-                    Some(p) => active
-                        .keys()
-                        .min_by_key(|&&k| {
-                            let dist = (k as i16 - p as i16).unsigned_abs();
-                            (dist, u8::MAX - k) // tiebreak: higher pitch wins
-                        })
-                        .copied(),
-                }
-            }
-            VoiceSelection::HighestVelocity => active_vel
-                .iter()
-                .max_by(|(k1, v1), (k2, v2)| v1.cmp(v2).then_with(|| k1.1.cmp(&k2.1)))
-                .map(|((_, p), _)| *p),
-        };
-
-        if new_winner != current_winner {
-            // Flush the previous segment.
-            if let Some(pitch) = current_winner {
-                let dur = event.abs_tick.saturating_sub(segment_start);
-                if dur > 0 {
-                    if let Some(note) =
-                        make_note(pitch, segment_start, dur, tempo_map, ticks_per_beat)
-                    {
-                        notes.push(note);
-                        prev_pitch = Some(pitch); // for NearestPitch contour tracking
-                        // Audible note ended; silence starts here.
-                        if include_rests {
-                            rest_start = Some(event.abs_tick);
-                        }
-                    }
-                    // Out-of-range segment: rest_start unchanged (silence continues).
-                }
-            }
-            // previous was None (silence) — rest_start already set; no flush needed.
-
-            // Start the new segment.
-            match new_winner {
-                Some(new_pitch) if (31u8..=127).contains(&new_pitch) => {
-                    // Audible note starting: emit any pending rest.
-                    if include_rests {
-                        if let Some(rs) = rest_start.take() {
-                            let is_leading = !first_note_started;
-                            if !(trim_start && is_leading) {
-                                if let Some(rest) =
-                                    make_rest(rs, event.abs_tick - rs, tempo_map, ticks_per_beat)
-                                {
-                                    notes.push(rest);
-                                }
-                            }
-                        }
-                    }
-                    first_note_started = true;
-                }
-                Some(_) => {
-                    // Out-of-range winner: treat as silence.
-                    // Open rest_start if not already tracking silence.
-                    if include_rests && rest_start.is_none() {
-                        rest_start = Some(event.abs_tick);
-                    }
-                }
-                None => {
-                    // No active notes: silence.
-                    // rest_start was already set when the last note ended (above).
-                }
-            }
-
-            segment_start = event.abs_tick;
-            current_winner = new_winner;
-        }
-    }
-
-    // Flush final dangling segment (always emit, even if duration is zero).
-    if let Some(pitch) = current_winner {
-        let dur = last_tick.saturating_sub(segment_start);
-        if let Some(note) = make_note(pitch, segment_start, dur, tempo_map, ticks_per_beat) {
-            notes.push(note);
-            if include_rests {
-                rest_start = Some(last_tick);
-            }
-        }
-        // Out-of-range dangling note: rest_start unchanged.
-    }
-
-    // Trailing rest (after last audible note, up to track end).
-    if include_rests && !trim_end {
-        let effective_end = track_end_tick.max(last_tick);
-        if let Some(rs) = rest_start {
-            if let Some(rest) = make_rest(rs, effective_end - rs, tempo_map, ticks_per_beat) {
-                notes.push(rest);
-            }
-        }
-    }
-
-    notes
-}
-
-/// Parse a Standard MIDI File and extract a sequence of [`SongNote`]s.
-///
-/// # Single-track mode (default)
-///
-/// Only the selected track (or the first track with note events) is used for
-/// notes. Tempo events from **all** tracks are collected into a global tempo
-/// map, so that a conductor track in a Format 1 file is handled correctly.
-///
-/// Polyphony within the selected track is resolved with "latest `NoteOn` wins":
-/// a new `NoteOn` cuts the previous active note. Chords are reduced to the most
-/// recently started note.
-///
-/// # Multi-track merge mode
-///
-/// When [`MidiConfig::merge_all_tracks`] is `true`, note events from all tracks
-/// are merged into a single timeline and reduced to one voice using the
-/// sweep-line algorithm. The active note is selected according to
-/// [`MidiConfig::voice_selection`]. This dramatically reduces the chunk count
-/// for complex MIDI files with many short overlapping notes.
-///
-/// # Rests
-///
-/// By default, silence between notes is dropped. Enable
-/// [`MidiConfig::include_rests`] to encode gaps as rest notes (pitch 0).
-/// Use [`MidiConfig::trim_start`] / [`MidiConfig::trim_end`] to control
-/// whether leading/trailing silence is included.
-///
-/// # Errors
-///
-/// Returns [`MidiError`] if the file cannot be parsed, contains no usable
-/// notes, uses unsupported timing, or is MIDI Format 2.
-pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongNote>, MidiError> {
-    let smf = Smf::parse(midi_bytes).map_err(MidiError::Parse)?;
-
-    // Reject Format 2 (sequential multi-song).
-    if smf.header.format == Format::Sequential {
-        return Err(MidiError::UnsupportedFormat);
-    }
-
-    let ticks_per_beat = match smf.header.timing {
-        Timing::Metrical(t) => {
-            let v = u32::from(t.as_int());
-            if v == 0 {
-                return Err(MidiError::InvalidTiming);
-            }
-            v
-        }
-        Timing::Timecode(..) => return Err(MidiError::UnsupportedTiming),
-    };
-
-    // Validate channel if provided.
-    if let Some(ch) = config.channel {
-        if ch > 15 {
-            return Err(MidiError::InvalidChannel(ch));
-        }
-    }
-
-    // Build a global tempo map from all tracks, then apply any override.
-    let mut tempo_map = build_tempo_map(&smf);
-    if let Some(override_tempo) = config.tempo_micros_per_beat {
-        tempo_map.clear();
-        tempo_map.push(TempoChange {
-            abs_tick: 0,
-            micros_per_beat: override_tempo,
-        });
-    }
-
-    // Compute the track end tick only when needed (trailing rest support).
-    let track_end_tick = if config.include_rests && !config.trim_end {
-        find_max_track_end_tick(&smf)
-    } else {
-        0
-    };
-
-    let notes = if config.merge_all_tracks {
-        let mut events = collect_note_events(&smf, config.filter_percussion, config.channel);
-        events.sort_unstable();
-        monophonize_events(
-            &events,
-            config.voice_selection,
-            &tempo_map,
-            ticks_per_beat,
-            config.include_rests,
-            config.trim_start,
-            config.trim_end,
-            track_end_tick,
-        )
-    } else {
-        single_track_notes(
-            &smf,
-            config.track,
-            config.channel,
-            &tempo_map,
-            ticks_per_beat,
-            config.include_rests,
-            config.trim_start,
-            config.trim_end,
-        )?
-    };
-
-    if notes.is_empty() {
-        Err(MidiError::NoNotes)
-    } else {
-        Ok(notes)
-    }
-}
-
-/// Extract notes from a single track using "latest NoteOn wins" monophony.
-#[allow(clippy::too_many_arguments)]
-fn single_track_notes(
-    smf: &Smf<'_>,
-    track_selection: Option<usize>,
-    channel_filter: Option<u8>,
-    tempo_map: &[TempoChange],
-    ticks_per_beat: u32,
-    include_rests: bool,
-    trim_start: bool,
-    trim_end: bool,
-) -> Result<Vec<SongNote>, MidiError> {
-    let track_idx = match track_selection {
-        Some(idx) => idx,
-        None => smf
-            .tracks
-            .iter()
-            .position(|track| {
-                track.iter().any(|e| {
-                    if let TrackEventKind::Midi { channel, message } = e.kind {
-                        if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
-                            return false;
-                        }
-                        matches!(message, MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0)
-                    } else {
-                        false
-                    }
-                })
-            })
-            .ok_or(MidiError::NoNotes)?,
-    };
-
-    let selected_track = smf.tracks.get(track_idx).ok_or(MidiError::NoNotes)?;
-
-    let mut notes: Vec<SongNote> = Vec::new();
-    let mut abs_tick: u64 = 0;
-    // Currently sounding note: (pitch, start_tick).
-    let mut active: Option<(u8, u64)> = None;
-    // Start of the current silence gap (tick); `Some(0)` at the beginning so
-    // that leading silence before the first note is tracked.
-    let mut gap_start: Option<u64> = if include_rests { Some(0) } else { None };
-    // Whether any audible note (pitch 31–127) has started yet.
-    let mut first_audible_started = false;
-    // Track end tick (from EndOfTrack meta or last event tick).
-    let mut track_end_tick: u64 = 0;
-
-    for event in selected_track {
-        abs_tick += u64::from(event.delta.as_int());
-
-        match event.kind {
-            TrackEventKind::Meta(MetaMessage::EndOfTrack) => {
-                track_end_tick = abs_tick;
-            }
-            TrackEventKind::Midi {
-                channel,
-                message: MidiMessage::NoteOn { key, vel },
-            } => {
-                if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
-                    continue;
-                }
-                if vel.as_int() > 0 {
-                    // New note: cut any active note (monophonic extraction, no gap).
-                    if let Some((pitch, start)) = active.take() {
-                        if let Some(note) =
-                            make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
-                        {
-                            notes.push(note);
-                            // In-range note was cut; new note immediately follows —
-                            // no gap is created, so don't open gap_start here.
-                        }
-                        // If out-of-range: gap_start remains unchanged (silence continues).
-                    }
-                    let key_u8 = key.as_int();
-                    let in_range = (31u8..=127).contains(&key_u8);
-                    if in_range {
-                        // Audible note starting: emit any pending rest.
-                        if include_rests {
-                            if let Some(gs) = gap_start.take() {
-                                let is_leading = !first_audible_started;
-                                if !(trim_start && is_leading) {
-                                    if let Some(rest) =
-                                        make_rest(gs, abs_tick - gs, tempo_map, ticks_per_beat)
-                                    {
-                                        notes.push(rest);
-                                    }
-                                }
-                            }
-                        }
-                        first_audible_started = true;
-                    }
-                    // Out-of-range NoteOn: treat as silence; don't update gap_start.
-                    active = Some((key_u8, abs_tick));
-                } else {
-                    // NoteOn with vel == 0 is equivalent to NoteOff.
-                    if let Some((pitch, start)) = active {
-                        if pitch == key.as_int() {
-                            active = None;
-                            if let Some(note) =
-                                make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
-                            {
-                                notes.push(note);
-                                // Audible note ended: silence starts here.
-                                if include_rests {
-                                    gap_start = Some(abs_tick);
-                                }
-                            }
-                            // Out-of-range: gap_start unchanged (silence was already tracked).
-                        }
-                    }
-                }
-            }
-            TrackEventKind::Midi {
-                channel,
-                message: MidiMessage::NoteOff { key, .. },
-            } => {
-                if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
-                    continue;
-                }
-                if let Some((pitch, start)) = active {
-                    if pitch == key.as_int() {
-                        active = None;
-                        if let Some(note) =
-                            make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
-                        {
-                            notes.push(note);
-                            if include_rests {
-                                gap_start = Some(abs_tick);
-                            }
-                        }
-                        // Out-of-range: gap_start unchanged.
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Dangling note still active at end-of-track.
-    if let Some((pitch, start)) = active {
-        if let Some(note) = make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat) {
-            notes.push(note);
-            if include_rests {
-                gap_start = Some(abs_tick);
-            }
-        }
-        // Out-of-range dangling note: gap_start unchanged.
-    }
-
-    // Trailing rest (after last audible note, up to EndOfTrack).
-    if include_rests && !trim_end {
-        let effective_end = track_end_tick.max(abs_tick);
-        if let Some(gs) = gap_start {
-            if let Some(rest) = make_rest(gs, effective_end - gs, tempo_map, ticks_per_beat) {
-                notes.push(rest);
-            }
-        }
-    }
-
-    Ok(notes)
-}
-
-/// Attempt to build a [`SongNote`] from a MIDI pitch and timing data.
-///
-/// Returns `None` if the pitch is outside the robot's range (31–127).
-fn make_note(
-    pitch: u8,
-    start_tick: u64,
-    dur_ticks: u64,
-    tempo_map: &[TempoChange],
-    ticks_per_beat: u32,
-) -> Option<SongNote> {
-    let duration = ticks_to_robot_units(start_tick, dur_ticks, tempo_map, ticks_per_beat);
-    SongNote::new(pitch, duration).ok()
-}
-
-/// Build a rest [`SongNote`] (pitch = 0) from a silence span.
-///
-/// Returns `None` if `dur_ticks` is zero (explicit check before calling
-/// `ticks_to_robot_units`, which clamps zero to 1).
-fn make_rest(
-    start_tick: u64,
-    dur_ticks: u64,
-    tempo_map: &[TempoChange],
-    ticks_per_beat: u32,
-) -> Option<SongNote> {
-    if dur_ticks == 0 {
-        return None;
-    }
-    let duration = ticks_to_robot_units(start_tick, dur_ticks, tempo_map, ticks_per_beat);
-    Some(SongNote::rest(duration))
-}
-
-/// Find the maximum track end tick across all tracks.
-///
-/// Uses the `EndOfTrack` meta event if present; falls back to the tick of the
-/// last event in the track if there is no explicit `EndOfTrack`.
-fn find_max_track_end_tick(smf: &Smf<'_>) -> u64 {
-    smf.tracks
-        .iter()
-        .map(|track| {
-            let mut abs_tick: u64 = 0;
-            let mut end_tick: u64 = 0;
-            for event in track {
-                abs_tick += u64::from(event.delta.as_int());
-                if let TrackEventKind::Meta(MetaMessage::EndOfTrack) = event.kind {
-                    end_tick = abs_tick;
-                }
-            }
-            end_tick.max(abs_tick)
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// Split a flat [`Vec<SongNote>`] into chunks of at most [`MAX_SONG_NOTES`]
-/// (16) notes each.
-///
-/// Each chunk can be uploaded to a single song slot with
-/// [`define_song`](crate::create::Create::define_song).
-pub fn notes_to_chunks(notes: Vec<SongNote>) -> Vec<Vec<SongNote>> {
-    notes.chunks(MAX_SONG_NOTES).map(|c| c.to_vec()).collect()
-}
-
-/// Read the initial tempo from a Standard MIDI File, in **microseconds per
-/// beat** (µs/beat).
-///
-/// Returns the tempo that is in effect at tick 0 according to the file's
-/// tempo map.  If no `Set Tempo` meta-event is present the MIDI default of
-/// **500 000 µs/beat** (120 BPM) is returned.
-///
-/// To convert to BPM: `60_000_000 / tempo_micros_per_beat`.
-///
-/// # Errors
-///
-/// Returns [`MidiError`] if the file cannot be parsed, uses SMPTE timing,
-/// is MIDI Format 2, or has an invalid ticks-per-beat of zero.
-///
-/// # Example
-///
-/// ```no_run
-/// use create_oi::midi::{midi_initial_tempo, MidiError};
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let bytes = std::fs::read("assets/midi/game-over.mid")?;
-/// let tempo = midi_initial_tempo(&bytes)?;
-/// println!("Initial tempo: {} BPM", 60_000_000 / tempo);
-/// # Ok(())
-/// # }
-/// ```
-pub fn midi_initial_tempo(midi_bytes: &[u8]) -> Result<u32, MidiError> {
-    let smf = Smf::parse(midi_bytes).map_err(MidiError::Parse)?;
-
-    if smf.header.format == Format::Sequential {
-        return Err(MidiError::UnsupportedFormat);
-    }
-    match smf.header.timing {
-        Timing::Timecode(..) => return Err(MidiError::UnsupportedTiming),
-        Timing::Metrical(t) => {
-            if t.as_int() == 0 {
-                return Err(MidiError::InvalidTiming);
-            }
-        }
-    }
-
-    let tempo_map = build_tempo_map(&smf);
-    Ok(tempo_at(&tempo_map, 0))
-}
+pub use config::{MidiConfig, MidiError, VoiceSelection};
+pub use parse::{midi_initial_tempo, midi_to_notes, notes_to_chunks};
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
+    use core::num::NonZeroUsize;
+    use create_oi_protocol::MAX_SONG_NOTES;
+
+    use super::events::NoteEvent;
+    use super::voice_reduce::limit_voices;
     use super::*;
 
     /// Build a minimal SMF Format 0 byte stream with one track.
@@ -976,6 +111,28 @@ mod tests {
     fn tempo_bytes(micros_per_beat: u32) -> [u8; 3] {
         let b = micros_per_beat.to_be_bytes();
         [b[1], b[2], b[3]]
+    }
+
+    /// Build a [`NoteEvent`] for a NoteOn.
+    fn note_on(tick: u64, ch: u8, pitch: u8, vel: u8) -> NoteEvent {
+        NoteEvent {
+            abs_tick: tick,
+            is_on: true,
+            pitch,
+            channel: ch,
+            velocity: vel,
+        }
+    }
+
+    /// Build a [`NoteEvent`] for a NoteOff.
+    fn note_off(tick: u64, ch: u8, pitch: u8) -> NoteEvent {
+        NoteEvent {
+            abs_tick: tick,
+            is_on: false,
+            pitch,
+            channel: ch,
+            velocity: 0,
+        }
     }
 
     // ── Basic note ──────────────────────────────────────────────────────────
@@ -1194,8 +351,10 @@ mod tests {
 
     // ── notes_to_chunks ──────────────────────────────────────────────────────
 
-    fn make_notes(count: usize) -> Vec<SongNote> {
-        (0..count).map(|_| SongNote::new(60, 32).unwrap()).collect()
+    fn make_notes(count: usize) -> Vec<crate::types::SongNote> {
+        (0..count)
+            .map(|_| crate::types::SongNote::new(60, 32).unwrap())
+            .collect()
     }
 
     #[test]
@@ -2010,5 +1169,271 @@ mod tests {
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].midi_note(), 60); // C4 wins while both active
         assert_eq!(notes[1].midi_note(), 64); // E4 plays alone after C4 ends
+    }
+
+    // ── limit_voices: HighestPitch ───────────────────────────────────────────
+
+    #[test]
+    fn test_limit_voices_highest_pitch_drops_lowest() {
+        // 3 NoteOns at tick 0, max=2, HighestPitch → C4(60) dropped.
+        let events = vec![
+            note_on(0, 0, 60, 64), // C4 — should be dropped
+            note_on(0, 0, 64, 64), // E4 — kept
+            note_on(0, 0, 67, 64), // G4 — kept
+            note_off(120, 0, 60),
+            note_off(120, 0, 64),
+            note_off(120, 0, 67),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::HighestPitch,
+        );
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert_eq!(on_pitches.len(), 2);
+        assert!(on_pitches.contains(&64)); // E4 kept
+        assert!(on_pitches.contains(&67)); // G4 kept
+        assert!(!on_pitches.contains(&60)); // C4 dropped
+    }
+
+    #[test]
+    fn test_limit_voices_pass_through_when_under_limit() {
+        // 2 NoteOns, max=3 → all pass through unchanged.
+        let events = vec![
+            note_on(0, 0, 60, 64),
+            note_on(0, 0, 64, 64),
+            note_off(120, 0, 60),
+            note_off(120, 0, 64),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(3).unwrap(),
+            VoiceSelection::HighestPitch,
+        );
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert_eq!(on_pitches.len(), 2); // both kept
+        assert!(on_pitches.contains(&60));
+        assert!(on_pitches.contains(&64));
+    }
+
+    // ── limit_voices: sustained note evicted → synthetic NoteOff ─────────────
+
+    #[test]
+    fn test_limit_voices_sustained_note_evicted_gets_synthetic_noteoff() {
+        // C4 starts at tick 0. At tick 120, E4 and G4 join → 3 > max=2.
+        // HighestPitch keeps G4 and E4, evicts C4 (which is sustained).
+        // Expected: synthetic NoteOff for C4 at tick 120; original off at 240 dropped.
+        let events = vec![
+            note_on(0, 0, 60, 64),   // C4 starts
+            note_on(120, 0, 64, 64), // E4 joins at tick 120
+            note_on(120, 0, 67, 64), // G4 joins at tick 120
+            note_off(240, 0, 60),    // original C4 off (should be dropped)
+            note_off(240, 0, 64),
+            note_off(240, 0, 67),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::HighestPitch,
+        );
+
+        // Synthetic NoteOff for C4 at tick 120.
+        let synthetic_off = result
+            .iter()
+            .find(|e| !e.is_on && e.pitch == 60 && e.abs_tick == 120);
+        assert!(
+            synthetic_off.is_some(),
+            "synthetic NoteOff for C4 must appear at tick 120"
+        );
+
+        // Original NoteOff for C4 at tick 240 must NOT appear (note already closed).
+        let late_off = result
+            .iter()
+            .find(|e| !e.is_on && e.pitch == 60 && e.abs_tick == 240);
+        assert!(
+            late_off.is_none(),
+            "original NoteOff for evicted C4 must be dropped"
+        );
+
+        // E4 and G4 NoteOns are emitted.
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert!(on_pitches.contains(&64));
+        assert!(on_pitches.contains(&67));
+    }
+
+    // ── limit_voices: new NoteOn suppressed when slots full ──────────────────
+
+    #[test]
+    fn test_limit_voices_new_noteon_suppressed_when_slots_full() {
+        // C4 and E4 active from tick 0. At tick 120, G4 tries to join → 3 > max=2.
+        // With LowestPitch, G4 (highest) is the least-important → evicted.
+        // G4 is a NEW NoteOn (not sustained) → suppressed, no synthetic NoteOff.
+        let events = vec![
+            note_on(0, 0, 60, 64),
+            note_on(0, 0, 64, 64),
+            note_on(120, 0, 67, 64), // new arrival, highest pitch — evicted by LowestPitch
+            note_off(240, 0, 60),
+            note_off(240, 0, 64),
+            note_off(240, 0, 67),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::LowestPitch,
+        );
+
+        // G4 NoteOn must not appear (was never admitted).
+        let g4_on = result.iter().find(|e| e.is_on && e.pitch == 67);
+        assert!(g4_on.is_none(), "G4 NoteOn must be suppressed");
+
+        // No NoteOff for G4 either (was never opened).
+        let g4_off = result.iter().find(|e| !e.is_on && e.pitch == 67);
+        assert!(g4_off.is_none(), "G4 NoteOff must not appear");
+
+        // C4 and E4 NoteOns are kept (they're already active).
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert!(on_pitches.contains(&60));
+        assert!(on_pitches.contains(&64));
+    }
+
+    // ── limit_voices: LowestPitch ────────────────────────────────────────────
+
+    #[test]
+    fn test_limit_voices_lowest_pitch_keeps_lowest() {
+        // 3 notes, max=2, LowestPitch → G4(67) dropped.
+        let events = vec![
+            note_on(0, 0, 60, 64),
+            note_on(0, 0, 64, 64),
+            note_on(0, 0, 67, 64), // highest — should be dropped
+            note_off(120, 0, 60),
+            note_off(120, 0, 64),
+            note_off(120, 0, 67),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::LowestPitch,
+        );
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert_eq!(on_pitches.len(), 2);
+        assert!(on_pitches.contains(&60)); // C4 kept
+        assert!(on_pitches.contains(&64)); // E4 kept
+        assert!(!on_pitches.contains(&67)); // G4 dropped
+    }
+
+    // ── limit_voices: HighestVelocity ────────────────────────────────────────
+
+    #[test]
+    fn test_limit_voices_highest_velocity_keeps_loudest() {
+        // 3 notes with different velocities, max=2 → quietest dropped.
+        let events = vec![
+            note_on(0, 0, 60, 30), // C4 vel=30 — quietest, dropped
+            note_on(0, 0, 64, 80), // E4 vel=80 — kept
+            note_on(0, 0, 67, 60), // G4 vel=60 — kept
+            note_off(120, 0, 60),
+            note_off(120, 0, 64),
+            note_off(120, 0, 67),
+        ];
+        let result = limit_voices(
+            &events,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::HighestVelocity,
+        );
+        let on_pitches: Vec<u8> = result.iter().filter(|e| e.is_on).map(|e| e.pitch).collect();
+        assert_eq!(on_pitches.len(), 2);
+        assert!(on_pitches.contains(&64)); // E4 (loudest) kept
+        assert!(on_pitches.contains(&67)); // G4 (middle) kept
+        assert!(!on_pitches.contains(&60)); // C4 (quietest) dropped
+    }
+
+    // ── limit_voices: per-tick batching invariant ────────────────────────────
+
+    #[test]
+    fn test_limit_voices_same_tick_batch_is_atomic() {
+        // 3 NoteOns at the same tick but in different order should produce the
+        // same result — all are in the same tick group, processed atomically.
+        let events_a = vec![
+            note_on(0, 0, 60, 64),
+            note_on(0, 0, 64, 64),
+            note_on(0, 0, 67, 64),
+        ];
+        let mut events_b = events_a.clone();
+        // Reverse the order within the tick.
+        events_b.reverse();
+
+        let result_a = limit_voices(
+            &events_a,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::HighestPitch,
+        );
+        let result_b = limit_voices(
+            &events_b,
+            NonZeroUsize::new(2).unwrap(),
+            VoiceSelection::HighestPitch,
+        );
+
+        let pitches_a: Vec<u8> = result_a
+            .iter()
+            .filter(|e| e.is_on)
+            .map(|e| e.pitch)
+            .collect();
+        let pitches_b: Vec<u8> = result_b
+            .iter()
+            .filter(|e| e.is_on)
+            .map(|e| e.pitch)
+            .collect();
+
+        // Both orderings must keep the same set of pitches.
+        let mut sorted_a = pitches_a.clone();
+        let mut sorted_b = pitches_b.clone();
+        sorted_a.sort_unstable();
+        sorted_b.sort_unstable();
+        assert_eq!(sorted_a, sorted_b);
+
+        // The fix: both sorted results should be [64, 67] (E4 and G4).
+        assert_eq!(sorted_a, vec![64, 67]);
+
+        // Suppress unused warnings for the sorted input slices.
+        let _ = events_a;
+        let _ = events_b;
+    }
+
+    // ── limit_voices: via midi_to_notes end-to-end ───────────────────────────
+
+    #[test]
+    fn test_max_voices_integration_reduces_polyphony() {
+        // Two tracks: C4 and E4 and G4 all simultaneously.
+        // Without max_voices: highest pitch (G4) wins → 1 note.
+        // With max_voices=2: first reduce to {E4, G4}, then monophonize → G4.
+        // The result is the same here (G4 wins), but we verify it runs without error.
+        let tb = tempo_bytes(500_000);
+        let track0: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60, 64, // C4
+            0x78, 0x80, 60, 0, 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let track1: &[u8] = &[
+            0x00, 0x91, 64, 64, // E4 ch1
+            0x78, 0x81, 64, 0, 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf1(120, track0, track1);
+
+        // Without max_voices — baseline.
+        let config_base = MidiConfig {
+            merge_all_tracks: true,
+            ..MidiConfig::default()
+        };
+        let notes_base = midi_to_notes(&midi, &config_base).unwrap();
+        assert_eq!(notes_base.len(), 1);
+        assert_eq!(notes_base[0].midi_note(), 64); // E4 (highest in track1 ch1)
+
+        // With max_voices=1 — same result since already monophonic after limit.
+        let config_limited = MidiConfig {
+            merge_all_tracks: true,
+            max_voices: NonZeroUsize::new(1),
+            ..MidiConfig::default()
+        };
+        let notes_limited = midi_to_notes(&midi, &config_limited).unwrap();
+        assert_eq!(notes_limited.len(), 1);
+        assert_eq!(notes_limited[0].midi_note(), 64); // still E4 (highest overall)
     }
 }

@@ -9,6 +9,7 @@
 //! cargo run -p create-oi-tokio --example play_midi --features midi -- <PORT> [OPTIONS]
 //! ```
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -76,6 +77,10 @@ struct Args {
     /// Voice selection strategy when merging tracks (requires --merge-tracks)
     #[arg(short = 'v', long, value_enum, default_value = "highest")]
     voice: VoiceArg,
+
+    /// Limit polyphony to at most N simultaneous voices before monophonization
+    #[arg(short = 'p', long)]
+    max_voices: Option<NonZeroUsize>,
 
     /// Omit silence gaps between notes (suppress pitch-0 rest notes)
     #[arg(long)]
@@ -159,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_rests: !args.no_rests,
         trim_start: !args.keep_start_silence,
         trim_end: !args.keep_end_silence,
+        max_voices: args.max_voices,
         ..MidiConfig::default()
     };
 
