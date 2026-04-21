@@ -25,7 +25,7 @@ use core::time::Duration;
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
-use create_oi_protocol::types::BaudRate;
+use create_oi_protocol::types::{BaudRate, RadiusMm, VelocityMmPerSec};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -769,11 +769,8 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         velocity: Velocity,
         radius: Radius,
     ) -> Result<(), Error<T::Error>> {
-        self.send_cmd(&command::encode_drive(
-            velocity.to_mm_per_sec(),
-            radius.to_mm(),
-        ))
-        .await
+        self.send_cmd(&command::encode_drive(velocity.into(), radius.into()))
+            .await
     }
 
     /// Drive wheels directly with individual velocities.
@@ -791,11 +788,8 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "drive_direct (OPCODE 145) requires Create 1 or Create 2; not supported on Roomba 400",
             }));
         }
-        self.send_cmd(&command::encode_drive_direct(
-            right.to_mm_per_sec(),
-            left.to_mm_per_sec(),
-        ))
-        .await
+        self.send_cmd(&command::encode_drive_direct(right.into(), left.into()))
+            .await
     }
 
     /// Drive wheels with PWM values.
@@ -813,7 +807,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "drive_pwm (OPCODE 146) requires Create 2; not supported on Create 1 or Roomba 400",
             }));
         }
-        self.send_cmd(&command::encode_drive_pwm(right.to_pwm(), left.to_pwm()))
+        self.send_cmd(&command::encode_drive_pwm(right.into(), left.into()))
             .await
     }
 
@@ -825,9 +819,17 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         if self.model == RobotModel::Roomba400 {
             // Roomba 400 does not support Drive Direct (opcode 145).
             // Drive at velocity 0 with the "straight" special radius (0x8000 wire value = i16::MIN).
-            self.send_cmd(&command::encode_drive(0, i16::MIN)).await
+            self.send_cmd(&command::encode_drive(
+                VelocityMmPerSec::ZERO,
+                RadiusMm::STRAIGHT,
+            ))
+            .await
         } else {
-            self.send_cmd(&command::encode_drive_direct(0, 0)).await
+            self.send_cmd(&command::encode_drive_direct(
+                VelocityMmPerSec::ZERO,
+                VelocityMmPerSec::ZERO,
+            ))
+            .await
         }
     }
 
@@ -1003,9 +1005,13 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         }
         let half_axle_mm = self.model.axle_length() * 500.0;
         let v_mm = velocity.to_mm_per_sec() as f32;
-        let right_mm = (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500);
-        let left_mm = (libm::roundf(v_mm - omega.get() * half_axle_mm) as i16).clamp(-500, 500);
-        self.send_cmd(&command::encode_drive_direct(right_mm, left_mm))
+        let right = VelocityMmPerSec::from_raw(
+            (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500),
+        );
+        let left = VelocityMmPerSec::from_raw(
+            (libm::roundf(v_mm - omega.get() * half_axle_mm) as i16).clamp(-500, 500),
+        );
+        self.send_cmd(&command::encode_drive_direct(right, left))
             .await
     }
 

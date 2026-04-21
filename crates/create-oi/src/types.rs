@@ -10,6 +10,9 @@ use crate::error::ValidationError;
 // Re-export wire-level types for convenience
 pub use create_oi_protocol::types::{ChargingState, CleanMode, DayOfWeek, IrChar, OiMode};
 
+// Protocol-level drive newtypes (imported for From implementations below)
+use create_oi_protocol::types::{RadiusMm, VelocityMmPerSec, WheelPwm};
+
 // ---------------------------------------------------------------------------
 // OI protocol constants (from the iRobot Create 2 Open Interface Spec)
 // ---------------------------------------------------------------------------
@@ -514,6 +517,27 @@ impl TryFrom<f32> for MotorPower {
     type Error = ValidationError;
     fn try_from(v: f32) -> Result<Self, Self::Error> {
         Self::new(v)
+    }
+}
+
+impl From<Velocity> for VelocityMmPerSec {
+    #[inline(always)]
+    fn from(v: Velocity) -> Self {
+        VelocityMmPerSec::from_raw(v.to_mm_per_sec())
+    }
+}
+
+impl From<Radius> for RadiusMm {
+    #[inline(always)]
+    fn from(r: Radius) -> Self {
+        RadiusMm::from_raw(r.to_mm())
+    }
+}
+
+impl From<MotorPower> for WheelPwm {
+    #[inline(always)]
+    fn from(p: MotorPower) -> Self {
+        WheelPwm::from_raw(p.to_pwm())
     }
 }
 

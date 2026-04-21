@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 
 use crate::error::ProtocolError;
 use crate::opcode::Opcode;
+use crate::types::{RadiusMm, VelocityMmPerSec, WheelPwm};
 
 /// Start the OI. Transitions to Passive mode.
 #[inline(always)]
@@ -82,25 +83,25 @@ pub const fn encode_dock() -> [u8; 1] {
 /// Drive with velocity (mm/s) and radius (mm).
 /// Both values are signed 16-bit big-endian.
 #[inline(always)]
-pub const fn encode_drive(velocity_mm: i16, radius_mm: i16) -> [u8; 5] {
-    let v = velocity_mm.to_be_bytes();
-    let r = radius_mm.to_be_bytes();
+pub const fn encode_drive(velocity: VelocityMmPerSec, radius: RadiusMm) -> [u8; 5] {
+    let v = velocity.get().to_be_bytes();
+    let r = radius.get().to_be_bytes();
     [Opcode::Drive as u8, v[0], v[1], r[0], r[1]]
 }
 
 /// Drive wheels directly with individual velocities (mm/s).
 #[inline(always)]
-pub const fn encode_drive_direct(right_mm: i16, left_mm: i16) -> [u8; 5] {
-    let r = right_mm.to_be_bytes();
-    let l = left_mm.to_be_bytes();
+pub const fn encode_drive_direct(right: VelocityMmPerSec, left: VelocityMmPerSec) -> [u8; 5] {
+    let r = right.get().to_be_bytes();
+    let l = left.get().to_be_bytes();
     [Opcode::DriveDirect as u8, r[0], r[1], l[0], l[1]]
 }
 
 /// Drive wheels with PWM values (-255 to 255).
 #[inline(always)]
-pub const fn encode_drive_pwm(right_pwm: i16, left_pwm: i16) -> [u8; 5] {
-    let r = right_pwm.to_be_bytes();
-    let l = left_pwm.to_be_bytes();
+pub const fn encode_drive_pwm(right: WheelPwm, left: WheelPwm) -> [u8; 5] {
+    let r = right.get().to_be_bytes();
+    let l = left.get().to_be_bytes();
     [Opcode::DrivePwm as u8, r[0], r[1], l[0], l[1]]
 }
 
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn drive_positive() {
         // velocity = 200 mm/s, radius = 500 mm
-        let cmd = encode_drive(200, 500);
+        let cmd = encode_drive(VelocityMmPerSec::from_raw(200), RadiusMm::from_raw(500));
         assert_eq!(cmd[0], 137); // opcode
         assert_eq!(i16::from_be_bytes([cmd[1], cmd[2]]), 200);
         assert_eq!(i16::from_be_bytes([cmd[3], cmd[4]]), 500);
@@ -421,7 +422,7 @@ mod tests {
 
     #[test]
     fn drive_negative() {
-        let cmd = encode_drive(-300, -1000);
+        let cmd = encode_drive(VelocityMmPerSec::from_raw(-300), RadiusMm::from_raw(-1000));
         assert_eq!(cmd[0], 137);
         assert_eq!(i16::from_be_bytes([cmd[1], cmd[2]]), -300);
         assert_eq!(i16::from_be_bytes([cmd[3], cmd[4]]), -1000);
@@ -429,7 +430,10 @@ mod tests {
 
     #[test]
     fn drive_direct() {
-        let cmd = encode_drive_direct(100, -100);
+        let cmd = encode_drive_direct(
+            VelocityMmPerSec::from_raw(100),
+            VelocityMmPerSec::from_raw(-100),
+        );
         assert_eq!(cmd[0], 145);
         assert_eq!(i16::from_be_bytes([cmd[1], cmd[2]]), 100);
         assert_eq!(i16::from_be_bytes([cmd[3], cmd[4]]), -100);

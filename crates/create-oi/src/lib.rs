@@ -91,5 +91,5 @@ pub mod prelude {
     pub use create_oi_protocol::opcode::Opcode;
     pub use create_oi_protocol::sensor::SensorData;
     pub use create_oi_protocol::stream::StreamParser;
-    pub use create_oi_protocol::types::{BaudRate, OiMode};
+    pub use create_oi_protocol::types::{BaudRate, OiMode, RadiusMm, VelocityMmPerSec, WheelPwm};
 }

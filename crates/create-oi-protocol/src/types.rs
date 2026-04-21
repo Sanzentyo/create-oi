@@ -363,6 +363,119 @@ impl fmt::Display for IrChar {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Drive command wire-level integer newtypes
+// ---------------------------------------------------------------------------
+
+/// Wheel velocity in mm/s, as used in the OI wire protocol.
+///
+/// This is a raw protocol integer. It is the caller's responsibility to ensure
+/// the value lies within the OI spec limits (±500 mm/s for `Drive`/`DriveDirect`).
+/// The high-level `create-oi` crate performs that validation before constructing
+/// this type.
+///
+/// Use [`from_raw`](Self::from_raw) to construct; do not rely on raw integer
+/// conversions, which would defeat the type-safety purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VelocityMmPerSec(i16);
+
+impl VelocityMmPerSec {
+    /// Zero velocity (stopped).
+    pub const ZERO: Self = Self::from_raw(0);
+
+    /// Construct from a raw mm/s value. No range validation is performed.
+    #[inline(always)]
+    pub const fn from_raw(v: i16) -> Self {
+        Self(v)
+    }
+
+    /// Return the raw mm/s value.
+    #[inline(always)]
+    pub const fn get(self) -> i16 {
+        self.0
+    }
+}
+
+impl fmt::Display for VelocityMmPerSec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} mm/s", self.0)
+    }
+}
+
+/// Turning radius in mm, as used in the OI `Drive` command wire protocol.
+///
+/// Encodes both physical arc radii and the three OI special values:
+/// [`STRAIGHT`](Self::STRAIGHT), [`TURN_CW`](Self::TURN_CW), [`TURN_CCW`](Self::TURN_CCW).
+///
+/// Use [`from_raw`](Self::from_raw) for construction; do not pass raw integers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RadiusMm(i16);
+
+impl RadiusMm {
+    /// Drive straight (OI special: `0x8000` = `i16::MIN`).
+    pub const STRAIGHT: Self = Self::from_raw(i16::MIN);
+    /// Turn in place clockwise (OI special: `-1`).
+    pub const TURN_CW: Self = Self::from_raw(-1);
+    /// Turn in place counter-clockwise (OI special: `1`).
+    pub const TURN_CCW: Self = Self::from_raw(1);
+
+    /// Construct from a raw mm value. No range validation is performed.
+    #[inline(always)]
+    pub const fn from_raw(v: i16) -> Self {
+        Self(v)
+    }
+
+    /// Return the raw mm value.
+    #[inline(always)]
+    pub const fn get(self) -> i16 {
+        self.0
+    }
+}
+
+impl fmt::Display for RadiusMm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::STRAIGHT => f.write_str("straight"),
+            Self::TURN_CW => f.write_str("turn-cw"),
+            Self::TURN_CCW => f.write_str("turn-ccw"),
+            Self(v) => write!(f, "{v} mm"),
+        }
+    }
+}
+
+/// Wheel PWM value as used in the OI `DrivePwm` command wire protocol.
+///
+/// Valid OI range is ±255. The high-level `create-oi` crate enforces this
+/// before construction; this type itself performs no validation.
+///
+/// Use [`from_raw`](Self::from_raw) to construct; do not rely on raw integer
+/// conversions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WheelPwm(i16);
+
+impl WheelPwm {
+    /// Zero PWM (motor off).
+    pub const STOP: Self = Self::from_raw(0);
+
+    /// Construct from a raw PWM value. No range validation is performed.
+    #[inline(always)]
+    pub const fn from_raw(v: i16) -> Self {
+        Self(v)
+    }
+
+    /// Return the raw PWM value.
+    #[inline(always)]
+    pub const fn get(self) -> i16 {
+        self.0
+    }
+}
+
+impl fmt::Display for WheelPwm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PWM {}", self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +510,32 @@ mod tests {
     fn charging_state_display() {
         assert_eq!(ChargingState::NotCharging.to_string(), "NotCharging");
         assert_eq!(ChargingState::Unknown(99).to_string(), "Unknown(99)");
+    }
+
+    #[test]
+    fn velocity_mm_per_sec_round_trip() {
+        let v = VelocityMmPerSec::from_raw(300);
+        assert_eq!(v.get(), 300);
+        assert_eq!(VelocityMmPerSec::ZERO.get(), 0);
+        assert_eq!(v.to_string(), "300 mm/s");
+    }
+
+    #[test]
+    fn radius_mm_special_values() {
+        assert_eq!(RadiusMm::STRAIGHT.get(), i16::MIN);
+        assert_eq!(RadiusMm::TURN_CW.get(), -1);
+        assert_eq!(RadiusMm::TURN_CCW.get(), 1);
+        assert_eq!(RadiusMm::STRAIGHT.to_string(), "straight");
+        assert_eq!(RadiusMm::TURN_CW.to_string(), "turn-cw");
+        assert_eq!(RadiusMm::TURN_CCW.to_string(), "turn-ccw");
+        assert_eq!(RadiusMm::from_raw(500).to_string(), "500 mm");
+    }
+
+    #[test]
+    fn wheel_pwm_round_trip() {
+        let p = WheelPwm::from_raw(-128);
+        assert_eq!(p.get(), -128);
+        assert_eq!(WheelPwm::STOP.get(), 0);
+        assert_eq!(p.to_string(), "PWM -128");
     }
 }
