@@ -11,9 +11,9 @@ use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_tokio::TokioTransport;
 
-/// See `play_midi_sync` for rationale.  50 ms is conservative; reduce once
-/// playback is confirmed clean.
-const SONG_TIMING_BUFFER: Duration = Duration::from_millis(50);
+/// See `play_midi_sync` for rationale.  macOS USB-serial latency is typically
+/// ≤10 ms; 20 ms provides a 2× margin.
+const SONG_TIMING_BUFFER: Duration = Duration::from_millis(20);
 
 fn chunk_duration(chunk: &[SongNote]) -> Duration {
     Duration::from_micros(

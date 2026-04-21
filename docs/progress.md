@@ -794,15 +794,17 @@ pub struct MidiConfig {
 
 ### Root cause of "every other chunk inaudible"
 
-The OI specification states that `play_song` is **ignored** while a song is
-already playing. The double-buffer strategy issued `play_song(next_slot)` at
-the calculated moment the current chunk should end. However, OS sleep jitter
-(±2 ms on macOS) plus USB-to-serial latency (1–3 ms) often caused the command
-to arrive 1–3 ms early — before the robot had finished the current chunk —
-resulting in the command being silently dropped.
+> **Correction (Round 23/24):** This section originally stated that
+> `play_song` is *ignored* while a song is playing.  That is **incorrect**.
+> Per the OI specification (confirmed Round 20), `play_song` **interrupts**
+> the current song and immediately starts the new one.  The analysis below
+> is therefore partially wrong; see Round 23 for the correct diagnosis.
 
-Pattern: chunks 0, 2, 4, … (odd-numbered transitions) audible; chunks 1, 3,
-5, … (even-numbered transitions) dropped.
+The double-buffer strategy issued `play_song(next_slot)` at the calculated
+moment the current chunk should end.  However, OS sleep jitter (±2 ms on
+macOS) plus USB-to-serial write latency (1–10+ ms) often caused the command
+to arrive before the robot had finished the previous chunk, interrupting it
+mid-phrase.
 
 ### Fix: single-slot sequential playback
 
@@ -880,6 +882,38 @@ After running with the new code:
 
 ### Files changed
 
+- `crates/create-oi-serial/examples/play_midi_sync.rs`
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs`
+- `crates/create-oi-smol/examples/play_midi_smol.rs`
+
+---
+
+## Round 24 — SONG_TIMING_BUFFER reduced to 20 ms (hardware confirmed)
+
+### Result
+
+Hardware test confirmed: with `SONG_TIMING_BUFFER = 50 ms` and alternating
+slots (Round 23), all 111 chunks of `ssg_18.mid` played correctly.
+
+Sample diagnostic output (clean playback):
+
+```
+Chunk 1/111: slot=0 notes=16 dur=2.000s pitches=47..81
+Chunk 2/111: slot=1 notes=16 dur=2.875s pitches=52..83
+…
+```
+
+Root cause confirmed: **USB-to-serial write latency on macOS (~10 ms)** caused
+the host to wake up and issue `define_song` + `play_song` for the next chunk
+while the previous song was still playing on the robot. The interruption caused
+the new chunk to begin then immediately stop, producing silence for every other chunk.
+
+### Buffer reduction
+
+`SONG_TIMING_BUFFER` reduced from 50 ms → **20 ms** (2× safety margin over
+typical macOS USB latency of ≤10 ms).
+
+Files changed:
 - `crates/create-oi-serial/examples/play_midi_sync.rs`
 - `crates/create-oi-tokio/examples/play_midi_tokio.rs`
 - `crates/create-oi-smol/examples/play_midi_smol.rs`

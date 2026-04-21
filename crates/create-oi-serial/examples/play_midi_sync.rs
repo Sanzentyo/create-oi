@@ -43,8 +43,8 @@ use create_oi_serial::SerialTransport;
 ///
 /// This must exceed the USB-to-serial write latency so that `play_song`
 /// always arrives at the robot after the previous chunk has finished.
-/// 50 ms is conservative; reduce once playback is confirmed clean.
-const SONG_TIMING_BUFFER: Duration = Duration::from_millis(50);
+/// macOS USB-serial latency is typically ≤10 ms; 20 ms provides a 2× margin.
+const SONG_TIMING_BUFFER: Duration = Duration::from_millis(20);
 
 fn chunk_duration(chunk: &[SongNote]) -> Duration {
     Duration::from_micros(
