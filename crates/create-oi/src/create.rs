@@ -273,12 +273,25 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Start streaming the given packet IDs.
     ///
     /// Returns an error if this robot model does not support sensor streaming,
-    /// or if the packet ID list exceeds the protocol limit.
+    /// if the packet ID list exceeds the protocol limit, or if the total
+    /// stream payload per cycle would exceed 255 bytes.
     pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
                 field: "stream",
                 reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        let payload_bytes: usize = packet_ids
+            .iter()
+            .map(|&id| {
+                1 + create_oi_protocol::opcode::packet_info(id).map_or(0, |p| p.len as usize)
+            })
+            .sum();
+        if payload_bytes > 255 {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "stream payload per cycle exceeds OI limit of 255 bytes",
             }));
         }
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
@@ -400,11 +413,19 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Define a song.
     ///
     /// Songs can be defined in Passive, Safe, and Full mode per the OI spec.
+    /// Returns `ValidationError` if the song slot exceeds this model's maximum
+    /// (Create 2: 0–4, Create 1 / Roomba 400: 0–15).
     pub fn define_song(
         &mut self,
         number: SongNumber,
         notes: &[(u8, u8)],
     ) -> Result<(), Error<std::io::Error>> {
+        if number.get() > self.model.max_song_number() {
+            return Err(Error::Validation(ValidationError {
+                field: "number",
+                reason: "song slot exceeds this model's maximum",
+            }));
+        }
         let cmd = command::encode_song(number.get(), notes).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)
     }
@@ -412,7 +433,14 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Play a previously defined song.
     ///
     /// Songs can be played in Passive, Safe, and Full mode per the OI spec.
+    /// Returns `ValidationError` if the song slot exceeds this model's maximum.
     pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error<std::io::Error>> {
+        if number.get() > self.model.max_song_number() {
+            return Err(Error::Validation(ValidationError {
+                field: "number",
+                reason: "song slot exceeds this model's maximum",
+            }));
+        }
         self.send_cmd(&command::encode_play(number.get()))
     }
 }

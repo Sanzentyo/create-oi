@@ -565,3 +565,79 @@ fn define_song_available_in_passive() {
     let written = robot.transport().written_bytes();
     assert_eq!(written[1], 140);
 }
+
+// ---------------------------------------------------------------------------
+// define_song / play_song model-specific slot validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn define_song_rejects_out_of_range_slot_for_create2() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    // Slot 5 is valid for Create 1 (max=15) but not for Create 2 (max=4)
+    let song = SongNumber::new(5).unwrap();
+    let err = robot.define_song(song, &[(69u8, 32u8)]).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError for slot 5 on Create2, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn define_song_accepts_slot_15_for_create1() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create1);
+    let mut robot = robot.start().unwrap();
+
+    let song = SongNumber::new(15).unwrap();
+    robot.define_song(song, &[(69u8, 32u8)]).unwrap();
+    // Song opcode 140 must appear in the written bytes with song number 15 after it
+    let written = robot.transport().written_bytes();
+    let pos = written
+        .iter()
+        .position(|&b| b == 140)
+        .expect("opcode 140 not written");
+    assert_eq!(written[pos + 1], 15, "expected song slot 15 in payload");
+}
+
+#[test]
+fn play_song_rejects_out_of_range_slot_for_create2() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let song = SongNumber::new(5).unwrap();
+    let err = robot.play_song(song).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError for slot 5 on Create2, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// start_stream payload byte validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn start_stream_payload_overflow_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    // Packet 8 (wall sensor) has 1 data byte → each entry costs 2 bytes in stream payload.
+    // 128 × 2 = 256 > 255, so this should be rejected.
+    let ids: Vec<u8> = vec![8u8; 128];
+    let err = robot.start_stream(&ids).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError for oversized stream payload, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}

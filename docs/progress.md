@@ -91,5 +91,19 @@
   - **Doc fix**: Added doc comments to `left_encoder_counts`/`right_encoder_counts` noting u16 wraparound and how to compute signed deltas
   - **Bug fix**: `StreamParser` default capacity 256 → 258; maximum valid OI frame is 258 bytes (N=255 payload + 3 framing bytes); previously N=254/255 frames were rejected as oversized
   - Updated tests: vacuum guard tests extended (negative + boundary), song number tests updated, new `decode_distance_angle_fields` + `stasis_detected_accessor` tests
+- [x] **Round 4 model-aware songs + stream payload validation**:
+  - **Feature**: `CreateRobotModel::max_song_number() -> u8` — Create2=4, Create1/Roomba400=15
+  - **Change**: `OI_MAX_SONG_NUMBER` now 15 (most permissive global max); `SongNumber::new()` accepts 0–15
+  - **Feature**: `define_song` + `play_song` (sync + async) reject slots > `model.max_song_number()` before sending
+  - **Bug fix**: `start_stream` (sync + async) now validates total stream payload bytes per cycle ≤ 255; previously only packet count was checked, not byte payload size
+  - Updated tests: `song_number_valid/invalid`, new `model_max_song_number`, `define_song_rejects_out_of_range_slot_for_create2`, `define_song_accepts_slot_15_for_create1`, `play_song_rejects_out_of_range_slot_for_create2`, `start_stream_payload_overflow_rejects_before_send` (sync + async)
+
+### Test Summary
+- 51 unit tests (protocol)
+- 34 unit tests (types + control, +1 from Round 4)
+- 32 sync mock robot integration tests (+4 from Round 4)
+- 31 async mock robot integration tests (+4 from Round 4)
+- 1 protocol doc test
+- Total: **149 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅
 
 ### Remaining

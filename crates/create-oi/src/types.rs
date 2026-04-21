@@ -35,8 +35,9 @@ const OI_MAX_PWM: i16 = 255;
 /// Maximum song slot index for Create 2 (0–4, OI spec §5.13).
 ///
 /// Create 2 supports 5 song slots (0–4). Create 1 / Roomba 400–500 supports
-/// 16 slots (0–15), but this library targets Create 2 as the primary model.
-const OI_MAX_SONG_NUMBER: u8 = 4;
+/// 16 slots (0–15). This constant represents the maximum across all models;
+/// the control layer enforces the per-model limit via [`CreateRobotModel::max_song_number`].
+const OI_MAX_SONG_NUMBER: u8 = 15;
 
 /// Conversion factor: meters → millimeters.
 const M_TO_MM: f32 = 1000.0;
@@ -131,6 +132,18 @@ impl CreateRobotModel {
         match self {
             Self::Create1 | Self::Create2 => true,
             _ => false,
+        }
+    }
+
+    /// Maximum song slot index (0..=max, inclusive) for this model.
+    ///
+    /// - Create 2: 5 slots (0–4)
+    /// - Create 1 / Roomba 400: 16 slots (0–15)
+    #[inline(always)]
+    pub const fn max_song_number(self) -> u8 {
+        match self {
+            Self::Create2 => 4,
+            Self::Roomba400 | Self::Create1 => 15,
         }
     }
 
@@ -448,7 +461,11 @@ impl core::fmt::Display for LedIntensity {
     }
 }
 
-/// Song number (0..3, per OI spec §5.13).
+/// Song number (0–15 for Create 1 / Roomba 400, 0–4 for Create 2).
+///
+/// `SongNumber::new()` accepts the widest valid range (0–15). The control
+/// layer (`define_song`, `play_song`) further restricts this to the
+/// per-model maximum via [`CreateRobotModel::max_song_number`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SongNumber(u8);
 
@@ -457,7 +474,7 @@ impl SongNumber {
         if value > OI_MAX_SONG_NUMBER {
             return Err(ValidationError {
                 field: "SongNumber",
-                reason: "song number exceeds maximum (3)",
+                reason: "song number exceeds OI maximum of 15",
             });
         }
         Ok(Self(value))
@@ -702,13 +719,20 @@ mod tests {
     #[test]
     fn song_number_valid() {
         assert!(SongNumber::new(0).is_ok());
-        assert!(SongNumber::new(3).is_ok());
         assert!(SongNumber::new(4).is_ok());
+        assert!(SongNumber::new(15).is_ok());
     }
 
     #[test]
     fn song_number_invalid() {
-        assert!(SongNumber::new(5).is_err());
+        assert!(SongNumber::new(16).is_err());
+    }
+
+    #[test]
+    fn model_max_song_number() {
+        assert_eq!(CreateRobotModel::Create2.max_song_number(), 4);
+        assert_eq!(CreateRobotModel::Create1.max_song_number(), 15);
+        assert_eq!(CreateRobotModel::Roomba400.max_song_number(), 15);
     }
 
     #[test]
