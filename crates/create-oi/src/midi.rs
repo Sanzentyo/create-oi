@@ -76,8 +76,21 @@ pub struct MidiConfig {
     /// percussion in General MIDI; including drums in a melodic monophonization
     /// usually produces poor results.
     ///
+    /// Ignored when [`channel`](Self::channel) is explicitly set (the explicit
+    /// channel selection takes precedence).
+    ///
     /// Only used when [`merge_all_tracks`](Self::merge_all_tracks) is `true`.
     pub filter_percussion: bool,
+    /// Restrict note extraction to a single MIDI channel (0-indexed, 0–15).
+    /// `None` (default) includes all channels.
+    ///
+    /// When set, this overrides [`filter_percussion`](Self::filter_percussion):
+    /// even `channel = Some(9)` is allowed so that percussion can be extracted
+    /// deliberately. Valid values are `0..=15`; [`MidiError::InvalidChannel`]
+    /// is returned for values outside this range.
+    ///
+    /// Works in both single-track and multi-track merge modes.
+    pub channel: Option<u8>,
 }
 
 impl Default for MidiConfig {
@@ -88,6 +101,7 @@ impl Default for MidiConfig {
             merge_all_tracks: false,
             voice_selection: VoiceSelection::default(),
             filter_percussion: true,
+            channel: None,
         }
     }
 }
@@ -125,6 +139,9 @@ pub enum MidiError {
     /// The timing header has `ticks_per_beat == 0`, which would cause a
     /// division by zero in duration conversion.
     InvalidTiming,
+    /// The requested MIDI channel number is out of range. Valid channels are
+    /// 0–15 (0-indexed); the robot's OI has no concept of MIDI channels.
+    InvalidChannel(u8),
 }
 
 impl core::fmt::Display for MidiError {
@@ -140,6 +157,9 @@ impl core::fmt::Display for MidiError {
             }
             MidiError::InvalidTiming => {
                 write!(f, "ticks_per_beat is zero; invalid MIDI file")
+            }
+            MidiError::InvalidChannel(ch) => {
+                write!(f, "channel {ch} is out of range; valid channels are 0–15")
             }
         }
     }
@@ -258,8 +278,12 @@ struct NoteEvent {
 }
 
 /// Collect all NoteOn/NoteOff events from every track, optionally skipping
-/// MIDI channel 10 (0-indexed: 9, percussion).
-fn collect_note_events(smf: &Smf<'_>, filter_percussion: bool) -> Vec<NoteEvent> {
+/// MIDI channel 10 (0-indexed: 9, percussion) or filtering to a single channel.
+fn collect_note_events(
+    smf: &Smf<'_>,
+    filter_percussion: bool,
+    channel_filter: Option<u8>,
+) -> Vec<NoteEvent> {
     let mut events = Vec::new();
     for track in &smf.tracks {
         let mut abs_tick: u64 = 0;
@@ -267,8 +291,17 @@ fn collect_note_events(smf: &Smf<'_>, filter_percussion: bool) -> Vec<NoteEvent>
             abs_tick += u64::from(event.delta.as_int());
             if let TrackEventKind::Midi { channel, message } = event.kind {
                 let ch = channel.as_int();
-                if filter_percussion && ch == 9 {
-                    continue;
+                match channel_filter {
+                    Some(only_ch) => {
+                        if ch != only_ch {
+                            continue;
+                        }
+                    }
+                    None => {
+                        if filter_percussion && ch == 9 {
+                            continue;
+                        }
+                    }
                 }
                 let (is_on, pitch) = match message {
                     MidiMessage::NoteOn { key, vel } => (vel.as_int() > 0, key.as_int()),
@@ -404,6 +437,13 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
         Timing::Timecode(..) => return Err(MidiError::UnsupportedTiming),
     };
 
+    // Validate channel if provided.
+    if let Some(ch) = config.channel {
+        if ch > 15 {
+            return Err(MidiError::InvalidChannel(ch));
+        }
+    }
+
     // Build a global tempo map from all tracks, then apply any override.
     let mut tempo_map = build_tempo_map(&smf);
     if let Some(override_tempo) = config.tempo_micros_per_beat {
@@ -415,11 +455,17 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
     }
 
     let notes = if config.merge_all_tracks {
-        let mut events = collect_note_events(&smf, config.filter_percussion);
+        let mut events = collect_note_events(&smf, config.filter_percussion, config.channel);
         events.sort_unstable();
         monophonize_events(&events, config.voice_selection, &tempo_map, ticks_per_beat)
     } else {
-        single_track_notes(&smf, config.track, &tempo_map, ticks_per_beat)?
+        single_track_notes(
+            &smf,
+            config.track,
+            config.channel,
+            &tempo_map,
+            ticks_per_beat,
+        )?
     };
 
     if notes.is_empty() {
@@ -433,6 +479,7 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
 fn single_track_notes(
     smf: &Smf<'_>,
     track_selection: Option<usize>,
+    channel_filter: Option<u8>,
     tempo_map: &[TempoChange],
     ticks_per_beat: u32,
 ) -> Result<Vec<SongNote>, MidiError> {
@@ -443,7 +490,10 @@ fn single_track_notes(
             .iter()
             .position(|track| {
                 track.iter().any(|e| {
-                    if let TrackEventKind::Midi { message, .. } = e.kind {
+                    if let TrackEventKind::Midi { channel, message } = e.kind {
+                        if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
+                            return false;
+                        }
                         matches!(message, MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0)
                     } else {
                         false
@@ -465,9 +515,12 @@ fn single_track_notes(
 
         match event.kind {
             TrackEventKind::Midi {
+                channel,
                 message: MidiMessage::NoteOn { key, vel },
-                ..
             } => {
+                if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
+                    continue;
+                }
                 if vel.as_int() > 0 {
                     // New note: cut any active note (monophonic extraction).
                     if let Some((pitch, start)) = active.take() {
@@ -493,9 +546,12 @@ fn single_track_notes(
                 }
             }
             TrackEventKind::Midi {
+                channel,
                 message: MidiMessage::NoteOff { key, .. },
-                ..
             } => {
+                if channel_filter.is_some_and(|ch| channel.as_int() != ch) {
+                    continue;
+                }
                 if let Some((pitch, start)) = active {
                     if pitch == key.as_int() {
                         active = None;
@@ -1083,5 +1139,181 @@ mod tests {
         };
         let err = midi_to_notes(&midi, &config).unwrap_err();
         assert!(matches!(err, MidiError::NoNotes));
+    }
+
+    // ── Channel filter: invalid channel rejected ─────────────────────────────
+
+    #[test]
+    fn test_invalid_channel_rejected() {
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C, 0x40, 0x78, 0x80, 0x3C,
+            0x00, 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            channel: Some(16),
+            ..MidiConfig::default()
+        };
+        let err = midi_to_notes(&midi, &config).unwrap_err();
+        assert!(matches!(err, MidiError::InvalidChannel(16)));
+    }
+
+    // ── Channel filter: single-track mode ───────────────────────────────────
+
+    /// A single track contains events on two channels; only the requested
+    /// channel's notes should be returned.
+    fn make_two_channel_track_smf0() -> Vec<u8> {
+        // 120 ticks/beat, 120 BPM
+        // tick 0:   NoteOn ch0 C4 (0x90, 0x3C, 0x40)
+        // tick 120: NoteOff ch0 C4 (0x80, 0x3C, 0x00)
+        // tick 120: NoteOn ch1 E4 (0x91, 0x40, 0x40)
+        // tick 240: NoteOff ch1 E4 (0x81, 0x40, 0x00)
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], // tempo
+            0x00, 0x90, 0x3C, 0x40, // tick 0: NoteOn ch0 C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff ch0 C4 (delta=120)
+            0x00, 0x91, 0x40, 0x40, // tick 120: NoteOn ch1 E4 (delta=0)
+            0x78, 0x81, 0x40, 0x00, // tick 240: NoteOff ch1 E4 (delta=120)
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        smf0(120, track)
+    }
+
+    #[test]
+    fn test_channel_filter_single_track_ch0_only() {
+        let midi = make_two_channel_track_smf0();
+        let config = MidiConfig {
+            channel: Some(0),
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 60); // C4 on ch0
+    }
+
+    #[test]
+    fn test_channel_filter_single_track_ch1_only() {
+        let midi = make_two_channel_track_smf0();
+        let config = MidiConfig {
+            channel: Some(1),
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 64); // E4 on ch1
+    }
+
+    #[test]
+    fn test_channel_filter_single_track_no_match_returns_no_notes() {
+        let midi = make_two_channel_track_smf0();
+        let config = MidiConfig {
+            channel: Some(7),
+            ..MidiConfig::default()
+        };
+        let err = midi_to_notes(&midi, &config).unwrap_err();
+        assert!(matches!(err, MidiError::NoNotes));
+    }
+
+    // ── Channel filter: multi-track merge mode ───────────────────────────────
+
+    #[test]
+    fn test_channel_filter_merge_mode_selects_channel() {
+        // track0: ch0 C4; track1: ch1 E4 — both quarter notes simultaneously.
+        // channel=Some(0) → only C4.
+        let tb = tempo_bytes(500_000);
+        let track0: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // NoteOn ch0 C4 at tick 0
+            0x78, 0x80, 0x3C, 0x00, // NoteOff ch0 C4 at tick 120
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let track1: &[u8] = &[
+            0x00, 0x91, 0x40, 0x40, // NoteOn ch1 E4 at tick 0
+            0x78, 0x81, 0x40, 0x00, // NoteOff ch1 E4 at tick 120
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf1(120, track0, track1);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            channel: Some(0),
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 60); // C4 only
+    }
+
+    // ── Channel filter: channel=9 overrides filter_percussion=true ──────────
+
+    #[test]
+    fn test_channel9_overrides_filter_percussion() {
+        // filter_percussion=true (default) normally skips ch9.
+        // But channel=Some(9) should explicitly include ch9.
+        let tb = tempo_bytes(500_000);
+        // 0x99 = NoteOn ch9; 0x89 = NoteOff ch9.
+        let track0: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let track1: &[u8] = &[
+            0x00, 0x99, 0x24, 0x7F, // NoteOn ch9 pitch 36 (kick drum, in robot range)
+            0x78, 0x89, 0x24, 0x00, // NoteOff
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf1(120, track0, track1);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            filter_percussion: true, // default; should be overridden by channel=Some(9)
+            channel: Some(9),
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 36); // kick drum pitch
+    }
+
+    // ── Channel filter: auto-detect skips track with no notes on channel ─────
+
+    #[test]
+    fn test_channel_filter_autodetect_skips_wrong_channel_track() {
+        // Format 1: track 0 has tempo; track 1 has only ch0 notes;
+        // track 2 has ch2 notes. channel=Some(2) should auto-detect track 2.
+        let tb = tempo_bytes(500_000);
+        let track0: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let track1: &[u8] = &[
+            0x00, 0x90, 0x3C, 0x40, // NoteOn ch0 C4
+            0x78, 0x80, 0x3C, 0x00, // NoteOff ch0 C4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        // 0x92 = NoteOn ch2; 0x82 = NoteOff ch2. G4 = pitch 67.
+        let track2: &[u8] = &[
+            0x00, 0x92, 0x43, 0x40, // NoteOn ch2 G4
+            0x78, 0x82, 0x43, 0x00, // NoteOff ch2 G4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let len0 = track0.len() as u32;
+        let len1 = track1.len() as u32;
+        let len2 = track2.len() as u32;
+        let mut midi = Vec::new();
+        midi.extend_from_slice(b"MThd");
+        midi.extend_from_slice(&6u32.to_be_bytes());
+        midi.extend_from_slice(&1u16.to_be_bytes()); // format 1
+        midi.extend_from_slice(&3u16.to_be_bytes()); // 3 tracks
+        midi.extend_from_slice(&120u16.to_be_bytes()); // ticks_per_beat
+        for (chunk, len) in [(track0, len0), (track1, len1), (track2, len2)] {
+            midi.extend_from_slice(b"MTrk");
+            midi.extend_from_slice(&len.to_be_bytes());
+            midi.extend_from_slice(chunk);
+        }
+        let config = MidiConfig {
+            channel: Some(2),
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 67); // G4 on ch2
     }
 }
