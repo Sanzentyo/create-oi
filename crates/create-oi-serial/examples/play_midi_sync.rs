@@ -16,26 +16,24 @@
 //!
 //! ## Timing note (macOS USB-to-serial)
 //!
-//! On macOS, USB-to-serial write latency can exceed the nominal baud-rate
-//! transmission time by several milliseconds.  `SONG_TIMING_BUFFER` must be
-//! large enough so that `play_song` arrives at the robot **after** the
-//! previous chunk has finished playing.  The current value (50 ms) is
-//! conservative; reduce it once playback is confirmed clean.
+//! On macOS, USB-to-serial write latency is typically ≤10 ms. `SONG_TIMING_BUFFER`
+//! (20 ms) provides a 2× margin so `play_song` always arrives at the robot after
+//! the previous chunk has finished playing.
 //!
 //! # Usage
 //!
 //! ```text
-//! cargo run --example play_midi_sync --features midi -- /dev/ttyUSB0 [song.mid]
+//! cargo run --example play_midi_sync --features midi -- /dev/ttyUSB0 [song.mid] [bpm]
 //! ```
 //!
-//! When no MIDI path is given the bundled CC0 demo file
-//! (`assets/midi/game-over.mid`) is used.
+//! - `song.mid` defaults to the bundled CC0 demo file.
+//! - `bpm` overrides the tempo read from the MIDI file (e.g. `120`).
 
 use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
+use create_oi::midi::{MidiConfig, midi_initial_tempo, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_serial::SerialTransport;
 
@@ -64,14 +62,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into()
     });
+    let bpm_override: Option<u32> = env::args()
+        .nth(3)
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|_| "BPM must be a positive integer")?;
 
     println!("Reading {path}…");
     let bytes = std::fs::read(&path)?;
+
+    let file_tempo = midi_initial_tempo(&bytes)?;
+    let file_bpm = 60_000_000 / file_tempo;
+    println!("File tempo: {file_bpm} BPM ({file_tempo} µs/beat)");
+
+    let tempo_override = bpm_override.map(|bpm| {
+        let micros = 60_000_000 / bpm;
+        println!("BPM override: {bpm} BPM ({micros} µs/beat)");
+        micros
+    });
 
     let notes = midi_to_notes(
         &bytes,
         &MidiConfig {
             merge_all_tracks: true,
+            tempo_micros_per_beat: tempo_override,
             ..MidiConfig::default()
         },
     )?;

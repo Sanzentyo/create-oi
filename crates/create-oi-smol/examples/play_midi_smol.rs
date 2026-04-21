@@ -3,11 +3,17 @@
 //! See `play_midi_sync` for a full explanation of the sequential playback
 //! strategy.  This variant uses smol async I/O and `smol::Timer::after`
 //! for the chunk-duration wait.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run --example play_midi_smol --features midi -- /dev/ttyUSB0 [song.mid] [bpm]
+//! ```
 
 use std::env;
 use std::time::{Duration, Instant};
 
-use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
+use create_oi::midi::{MidiConfig, midi_initial_tempo, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_smol::SmolTransport;
 
@@ -34,14 +40,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .into()
         });
+        let bpm_override: Option<u32> = env::args()
+            .nth(3)
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| "BPM must be a positive integer")?;
 
         println!("Reading {path}…");
         let bytes = std::fs::read(&path)?;
+
+        let file_tempo = midi_initial_tempo(&bytes)?;
+        let file_bpm = 60_000_000 / file_tempo;
+        println!("File tempo: {file_bpm} BPM ({file_tempo} µs/beat)");
+
+        let tempo_override = bpm_override.map(|bpm| {
+            let micros = 60_000_000 / bpm;
+            println!("BPM override: {bpm} BPM ({micros} µs/beat)");
+            micros
+        });
 
         let notes = midi_to_notes(
             &bytes,
             &MidiConfig {
                 merge_all_tracks: true,
+                tempo_micros_per_beat: tempo_override,
                 ..MidiConfig::default()
             },
         )?;

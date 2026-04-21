@@ -600,6 +600,51 @@ pub fn notes_to_chunks(notes: Vec<SongNote>) -> Vec<Vec<SongNote>> {
     notes.chunks(MAX_SONG_NOTES).map(|c| c.to_vec()).collect()
 }
 
+/// Read the initial tempo from a Standard MIDI File, in **microseconds per
+/// beat** (µs/beat).
+///
+/// Returns the tempo that is in effect at tick 0 according to the file's
+/// tempo map.  If no `Set Tempo` meta-event is present the MIDI default of
+/// **500 000 µs/beat** (120 BPM) is returned.
+///
+/// To convert to BPM: `60_000_000 / tempo_micros_per_beat`.
+///
+/// # Errors
+///
+/// Returns [`MidiError`] if the file cannot be parsed, uses SMPTE timing,
+/// is MIDI Format 2, or has an invalid ticks-per-beat of zero.
+///
+/// # Example
+///
+/// ```no_run
+/// use create_oi::midi::{midi_initial_tempo, MidiError};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let bytes = std::fs::read("assets/midi/game-over.mid")?;
+/// let tempo = midi_initial_tempo(&bytes)?;
+/// println!("Initial tempo: {} BPM", 60_000_000 / tempo);
+/// # Ok(())
+/// # }
+/// ```
+pub fn midi_initial_tempo(midi_bytes: &[u8]) -> Result<u32, MidiError> {
+    let smf = Smf::parse(midi_bytes).map_err(MidiError::Parse)?;
+
+    if smf.header.format == Format::Sequential {
+        return Err(MidiError::UnsupportedFormat);
+    }
+    match smf.header.timing {
+        Timing::Timecode(..) => return Err(MidiError::UnsupportedTiming),
+        Timing::Metrical(t) => {
+            if t.as_int() == 0 {
+                return Err(MidiError::InvalidTiming);
+            }
+        }
+    }
+
+    let tempo_map = build_tempo_map(&smf);
+    Ok(tempo_at(&tempo_map, 0))
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
