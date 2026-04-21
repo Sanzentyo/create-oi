@@ -133,4 +133,22 @@
   - `delay()` uses `embassy_time::Timer::after()` (same as `EmbassyTransport`)
   - `just check-nostd` and `just ci` pass with no regressions
 
+- [x] **Round 6 OI spec compliance audit**:
+  - **Bug fix (critical)**: `MotorBits::to_raw()` had bits 3 and 4 reversed; per OI spec §5.6 bit 3 = side brush direction (clockwise), bit 4 = main brush direction (outward). All direction commands were sending the wrong bit to the wrong motor.
+  - **New tests**: `motor_bits_side_brush_backward_is_bit3` and `motor_bits_main_brush_backward_is_bit4` verify each direction bit individually (existing `motor_bits_reverse` masked the bug by setting both flags simultaneously).
+  - **New error variant**: `ProtocolError::TooFewItems { min, got }` added to `#[non_exhaustive]` enum.
+  - **Validation**: `encode_song[_into]` now rejects 0-note songs (OI spec §5.13: song length must be 1–16); `define_song` in sync + async APIs propagates the error.
+  - **Validation**: `encode_query_list[_into]` and `encode_stream[_into]` now reject empty packet ID lists.
+  - **Rename**: `SensorData::is_stasis_detected()` → `is_making_forward_progress()` (old name is a deprecated alias); the previous name implied the robot was stationary when bit 0 = 1 actually means forward progress.
+  - **Doc fixes**: `encode_motors` comment now correctly states bit 3 = side brush direction, bit 4 = main brush direction; `encode_motors_pwm` clarifies vacuum is 0–127 unsigned; song doc comments correct the song number range to 0–15 / 0–4.
+  - Commit: `0cdc873`
+
+### Test Summary (Round 6)
+- 56 unit tests (protocol, +5 from Round 6)
+- 36 unit tests (types + control, +2 from Round 6)
+- 36 sync mock robot integration tests
+- 35 async mock robot integration tests
+- 1 protocol doc test
+- Total: **163 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅ | `just check-nostd` ✅ | commit `0cdc873`
+
 ### Remaining
