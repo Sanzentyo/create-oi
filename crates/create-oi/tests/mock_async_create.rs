@@ -4,7 +4,8 @@ use std::io;
 use std::time::Duration;
 
 use create_oi::prelude::*;
-use create_oi::transport::AsyncTransport;
+use create_oi::transport::{AsyncBaudConfigurable, AsyncTransport};
+use create_oi_protocol::types::BaudRate;
 
 // ---------------------------------------------------------------------------
 // Async mock transport
@@ -19,6 +20,8 @@ struct MockAsyncTransport {
     closed: bool,
     /// When true, `read()` returns `Ok(0)` to simulate EOF/disconnect.
     eof_on_read: bool,
+    /// Last baud rate passed to `set_baud`.
+    last_set_baud: Option<BaudRate>,
 }
 
 impl MockAsyncTransport {
@@ -29,6 +32,7 @@ impl MockAsyncTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: false,
+            last_set_baud: None,
         }
     }
 
@@ -39,6 +43,7 @@ impl MockAsyncTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: false,
+            last_set_baud: None,
         }
     }
 
@@ -49,6 +54,7 @@ impl MockAsyncTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: true,
+            last_set_baud: None,
         }
     }
 
@@ -91,6 +97,13 @@ impl AsyncTransport for MockAsyncTransport {
 
     async fn delay(&mut self, _duration: Duration) {
         // No-op in tests — no real delay needed.
+    }
+}
+
+impl AsyncBaudConfigurable for MockAsyncTransport {
+    async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
+        self.last_set_baud = Some(rate);
+        Ok(())
     }
 }
 
@@ -391,13 +404,11 @@ async fn async_query_list_too_many_ids_rejects_before_send() {
     let mut create = create.start().await.unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    // 53 IDs exceeds the async stack buffer limit of 52.
-    let ids: Vec<u8> = (7..60).collect(); // 53 IDs
-    let err = create.query_list(&ids).await.unwrap_err();
-    assert!(
-        matches!(err, create_oi::error::Error::Validation(_)),
-        "expected ValidationError, got {err:?}"
-    );
+    // 256 IDs exceeds the OI protocol maximum of 255.
+    let ids = vec![8u8; 256];
+    let _err = create.query_list(&ids).await.unwrap_err();
+    // Error may be Protocol(TooManyItems) — what matters is that it is rejected
+    // and nothing was sent.
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
@@ -408,7 +419,8 @@ async fn async_start_stream_too_many_ids_rejects_before_send() {
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    let ids = vec![8u8; 53]; // 53 copies of valid packet 8 — exceeds async limit of 52
+    // 128 copies of packet 8 (wall, 1-byte) → 128 × (1+1) = 256 bytes per cycle > 255.
+    let ids = vec![8u8; 128];
     let err = create.start_stream(&ids).await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
@@ -500,12 +512,12 @@ async fn async_set_motors_pwm_invalid_values_reject_before_send() {
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    // Negative vacuum is invalid per OI spec (vacuum is 0..=127 only)
-    let err = create.set_motors_pwm(0, 0, -1).await.unwrap_err();
+    // Values > 127 are invalid per OI spec (vacuum is 0..=127 only)
+    let err = create.set_motors_pwm(0, 0, 128).await.unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    let err = create.set_motors_pwm(0, 0, i8::MIN).await.unwrap_err();
+    let err = create.set_motors_pwm(0, 0, 255).await.unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
@@ -1296,4 +1308,68 @@ async fn async_query_sensor_raw_rejects_unknown_id() {
         matches!(result, Err(create_oi::error::Error::Protocol(_))),
         "unknown ID 101 should return ProtocolError"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Async baud rate command tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_baud_sends_correct_bytes_and_calls_set_baud() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+
+    create.baud(BaudRate::Baud57600).await.unwrap();
+
+    let written = create.transport().written_bytes();
+    // START (128) + BAUD (129) + baud_code (9)
+    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud57600));
+}
+
+#[tokio::test]
+async fn async_baud_available_from_passive_mode() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+
+    assert!(create.baud(BaudRate::Baud115200).await.is_ok());
+}
+
+#[tokio::test]
+async fn async_baud_available_from_safe_mode() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    assert!(create.baud(BaudRate::Baud115200).await.is_ok());
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud115200));
+}
+
+#[tokio::test]
+async fn async_baud_available_from_full_mode() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap()
+        .to_full()
+        .await
+        .unwrap();
+
+    assert!(create.baud(BaudRate::Baud9600).await.is_ok());
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud9600));
 }

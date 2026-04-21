@@ -5,6 +5,89 @@
 use core::fmt;
 
 // ---------------------------------------------------------------------------
+// Baud rate codes (opcode 129 argument)
+// ---------------------------------------------------------------------------
+
+/// OI baud rate code (argument to opcode 129 / BAUD).
+///
+/// After the robot receives the `BAUD` command it switches to the new rate.
+/// The host must wait 100 ms and then reconfigure its serial connection
+/// to the same rate before sending further commands.
+///
+/// The default rate is 115200 for Create 2 and 57600 for Create 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BaudRate {
+    /// 300 bps
+    Baud300 = 0,
+    /// 600 bps
+    Baud600 = 1,
+    /// 1200 bps
+    Baud1200 = 2,
+    /// 2400 bps
+    Baud2400 = 3,
+    /// 4800 bps
+    Baud4800 = 4,
+    /// 9600 bps
+    Baud9600 = 5,
+    /// 14400 bps
+    Baud14400 = 6,
+    /// 19200 bps
+    Baud19200 = 7,
+    /// 28800 bps
+    Baud28800 = 8,
+    /// 57600 bps — default for Create 1
+    Baud57600 = 9,
+    /// 115200 bps — default for Create 2
+    Baud115200 = 10,
+}
+
+impl BaudRate {
+    /// The baud rate as a `u32`.
+    #[inline(always)]
+    pub const fn baud_u32(self) -> u32 {
+        match self {
+            Self::Baud300 => 300,
+            Self::Baud600 => 600,
+            Self::Baud1200 => 1200,
+            Self::Baud2400 => 2400,
+            Self::Baud4800 => 4800,
+            Self::Baud9600 => 9600,
+            Self::Baud14400 => 14400,
+            Self::Baud19200 => 19200,
+            Self::Baud28800 => 28800,
+            Self::Baud57600 => 57600,
+            Self::Baud115200 => 115200,
+        }
+    }
+
+    /// Decode a baud code byte. Returns `None` for values outside 0-10.
+    #[inline(always)]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Baud300),
+            1 => Some(Self::Baud600),
+            2 => Some(Self::Baud1200),
+            3 => Some(Self::Baud2400),
+            4 => Some(Self::Baud4800),
+            5 => Some(Self::Baud9600),
+            6 => Some(Self::Baud14400),
+            7 => Some(Self::Baud19200),
+            8 => Some(Self::Baud28800),
+            9 => Some(Self::Baud57600),
+            10 => Some(Self::Baud115200),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for BaudRate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} bps", self.baud_u32())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OI mode (runtime value from sensor data, packet 35)
 // ---------------------------------------------------------------------------
 

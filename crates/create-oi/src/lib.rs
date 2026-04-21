@@ -74,7 +74,10 @@ pub mod prelude {
     pub use crate::mode::{
         Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable,
     };
+    pub use crate::transport::AsyncBaudConfigurable;
     pub use crate::transport::AsyncTransport;
+    #[cfg(feature = "std")]
+    pub use crate::transport::BaudConfigurable;
     #[cfg(feature = "std")]
     pub use crate::transport::Transport;
     pub use crate::types::{
@@ -86,5 +89,5 @@ pub mod prelude {
     pub use create_oi_protocol::opcode::Opcode;
     pub use create_oi_protocol::sensor::SensorData;
     pub use create_oi_protocol::stream::StreamParser;
-    pub use create_oi_protocol::types::OiMode;
+    pub use create_oi_protocol::types::{BaudRate, OiMode};
 }

@@ -9,7 +9,7 @@
 
 use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
-use crate::transport::Transport;
+use crate::transport::{BaudConfigurable, Transport};
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
     PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
@@ -17,6 +17,7 @@ use crate::types::{
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
+use create_oi_protocol::types::BaudRate;
 use std::marker::PhantomData;
 
 /// A synchronous Create handle, parameterised by OI mode `M` and transport `T`.
@@ -340,8 +341,17 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Query a single sensor packet and decode it.
+    ///
+    /// Group packet IDs (0-6, 100) are not supported by this typed decode API;
+    /// use `query_sensor_raw()` to receive raw bytes for group packets.
     #[must_use = "query result must be used"]
     pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<std::io::Error>> {
+        if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_id",
+                reason: "group packet IDs (0-6, 100) are not decoded by query_sensor(); use query_sensor_raw() instead",
+            }));
+        }
         let raw = self.query_sensor_raw(packet_id)?;
         let mut sd = SensorData::default();
         sd.decode_packet(packet_id, &raw)?;
@@ -650,7 +660,7 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     ///
     /// - `main_brush` and `side_brush`: range -127..=127 (i8::MIN = -128 is rejected).
     ///   Positive = forward direction, negative = reverse.
-    /// - `vacuum`: range 0..=127. Negative values are invalid per the OI spec
+    /// - `vacuum`: range 0..=127. Values above 127 are invalid per the OI spec
     ///   (vacuum runs in one direction only) and are rejected without sending.
     ///
     /// Returns `ValidationError` if this model is not Create 2 (OPCODE 144 is
@@ -659,7 +669,7 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         &mut self,
         main_brush: i8,
         side_brush: i8,
-        vacuum: i8,
+        vacuum: u8,
     ) -> Result<(), Error<std::io::Error>> {
         if !self.model.is_create2() {
             return Err(Error::Validation(ValidationError {
@@ -675,10 +685,10 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
                 }));
             }
         }
-        if vacuum < 0 {
+        if vacuum > 127 {
             return Err(Error::Validation(ValidationError {
                 field: "vacuum",
-                reason: "vacuum PWM must be 0..=127; negative values are invalid per OI spec",
+                reason: "vacuum PWM must be 0..=127; values above 127 are invalid per OI spec",
             }));
         }
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
@@ -887,6 +897,31 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             }
         }
         self.send_cmd(&command::encode_schedule(days, times))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Baud-rate switching (Passive, Safe, Full) — requires BaudConfigurable
+// ---------------------------------------------------------------------------
+
+impl<M: SensorReadable, T: Transport + BaudConfigurable> Create<M, T> {
+    /// Change the robot's baud rate (opcode 129).
+    ///
+    /// Sends the `BAUD` command, waits 100 ms for the robot to switch, then
+    /// reconfigures the host serial connection to the new rate via
+    /// [`BaudConfigurable::set_baud`].
+    ///
+    /// Available from Passive, Safe, and Full modes. The mode is unchanged after
+    /// this call. All further commands must be sent at the new baud rate.
+    ///
+    /// # Note
+    ///
+    /// This method requires the transport to implement [`BaudConfigurable`].
+    /// `SerialTransport` from `create-oi-serial` supports this; Embassy transports do not.
+    pub fn baud(&mut self, rate: BaudRate) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_baud(rate))?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        self.transport.set_baud(rate).map_err(Error::Io)
     }
 }
 

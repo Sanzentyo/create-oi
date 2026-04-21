@@ -117,14 +117,14 @@ pub const fn encode_motors(bits: u8) -> [u8; 2] {
 /// Set motor PWM values: main brush, side brush, vacuum.
 ///
 /// `main_brush` and `side_brush`: signed byte (-127 to 127).
-/// `vacuum`: unsigned byte (0 to 127); negative values are not valid per OI spec.
+/// `vacuum`: unsigned byte (0 to 127); values above 127 are not valid per OI spec.
 #[inline(always)]
-pub const fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: i8) -> [u8; 4] {
+pub const fn encode_motors_pwm(main_brush: i8, side_brush: i8, vacuum: u8) -> [u8; 4] {
     [
         Opcode::MotorsPwm as u8,
         main_brush as u8,
         side_brush as u8,
-        vacuum as u8,
+        vacuum,
     ]
 }
 
@@ -379,9 +379,12 @@ pub const fn encode_date(day: u8, hour: u8, minute: u8) -> [u8; 4] {
 }
 
 /// Change baud rate.
+///
+/// After sending this command, wait 100 ms then reconfigure the host serial
+/// port to [`rate.baud_u32()`](crate::types::BaudRate::baud_u32).
 #[inline(always)]
-pub const fn encode_baud(baud_code: u8) -> [u8; 2] {
-    [Opcode::Baud as u8, baud_code]
+pub const fn encode_baud(rate: crate::types::BaudRate) -> [u8; 2] {
+    [Opcode::Baud as u8, rate as u8]
 }
 
 // ---------------------------------------------------------------------------

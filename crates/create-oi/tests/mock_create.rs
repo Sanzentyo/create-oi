@@ -4,7 +4,8 @@ use std::io;
 use std::time::Duration;
 
 use create_oi::prelude::*;
-use create_oi::transport::Transport;
+use create_oi::transport::{BaudConfigurable, Transport};
+use create_oi_protocol::types::BaudRate;
 
 // ---------------------------------------------------------------------------
 // Mock transport
@@ -22,6 +23,8 @@ struct MockTransport {
     closed: bool,
     /// When true, `read()` returns `Ok(0)` to simulate EOF/disconnect.
     eof_on_read: bool,
+    /// Last baud rate passed to `set_baud`.
+    last_set_baud: Option<BaudRate>,
 }
 
 impl MockTransport {
@@ -32,6 +35,7 @@ impl MockTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: false,
+            last_set_baud: None,
         }
     }
 
@@ -42,6 +46,7 @@ impl MockTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: false,
+            last_set_baud: None,
         }
     }
 
@@ -53,6 +58,7 @@ impl MockTransport {
             read_pos: 0,
             closed: false,
             eof_on_read: true,
+            last_set_baud: None,
         }
     }
 
@@ -96,6 +102,13 @@ impl Transport for MockTransport {
     }
 
     fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl BaudConfigurable for MockTransport {
+    fn set_baud(&mut self, rate: BaudRate) -> io::Result<()> {
+        self.last_set_baud = Some(rate);
         Ok(())
     }
 }
@@ -527,12 +540,12 @@ fn set_motors_pwm_invalid_values_reject_before_send() {
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    // Negative vacuum is invalid per OI spec (vacuum is 0..=127 only)
-    let err = create.set_motors_pwm(0, 0, -1).unwrap_err();
+    // Values > 127 are invalid per OI spec (vacuum is 0..=127 only)
+    let err = create.set_motors_pwm(0, 0, 128).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    let err = create.set_motors_pwm(0, 0, i8::MIN).unwrap_err();
+    let err = create.set_motors_pwm(0, 0, 255).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
@@ -1307,4 +1320,83 @@ fn query_sensor_raw_still_rejects_truly_unknown_id() {
         matches!(result, Err(create_oi::error::Error::Protocol(_))),
         "unknown ID 101 should return ProtocolError"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Baud rate command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn baud_sends_correct_bytes_and_calls_set_baud() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+
+    create.baud(BaudRate::Baud57600).unwrap();
+
+    let written = create.transport().written_bytes();
+    // START (128) + BAUD (129) + baud_code (9)
+    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud57600));
+}
+
+#[test]
+fn baud_available_from_passive_mode() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+
+    // Passive mode: baud() should compile and succeed
+    assert!(create.baud(BaudRate::Baud115200).is_ok());
+}
+
+#[test]
+fn baud_available_from_safe_mode() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    assert!(create.baud(BaudRate::Baud115200).is_ok());
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud115200));
+}
+
+#[test]
+fn baud_available_from_full_mode() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap()
+        .to_full()
+        .unwrap();
+
+    assert!(create.baud(BaudRate::Baud9600).is_ok());
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud9600));
+}
+
+#[test]
+fn baud_rate_baud_u32_all_codes() {
+    assert_eq!(BaudRate::Baud300.baud_u32(), 300);
+    assert_eq!(BaudRate::Baud600.baud_u32(), 600);
+    assert_eq!(BaudRate::Baud1200.baud_u32(), 1200);
+    assert_eq!(BaudRate::Baud2400.baud_u32(), 2400);
+    assert_eq!(BaudRate::Baud4800.baud_u32(), 4800);
+    assert_eq!(BaudRate::Baud9600.baud_u32(), 9600);
+    assert_eq!(BaudRate::Baud14400.baud_u32(), 14400);
+    assert_eq!(BaudRate::Baud19200.baud_u32(), 19200);
+    assert_eq!(BaudRate::Baud28800.baud_u32(), 28800);
+    assert_eq!(BaudRate::Baud57600.baud_u32(), 57600);
+    assert_eq!(BaudRate::Baud115200.baud_u32(), 115200);
+}
+
+#[test]
+fn baud_rate_from_code_round_trip() {
+    for code in 0u8..=10 {
+        let rate = BaudRate::from_code(code).expect("valid code");
+        assert_eq!(rate as u8, code);
+    }
+    assert!(BaudRate::from_code(11).is_none());
+    assert!(BaudRate::from_code(255).is_none());
 }

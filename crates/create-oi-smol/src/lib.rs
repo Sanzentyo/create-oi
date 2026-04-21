@@ -14,7 +14,8 @@
 use std::io;
 use std::time::Duration;
 
-use create_oi::transport::AsyncTransport;
+use create_oi::protocol::types::BaudRate;
+use create_oi::transport::{AsyncBaudConfigurable, AsyncTransport};
 use create_oi::types::RobotModel;
 use smol::Unblock;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
@@ -70,5 +71,15 @@ impl AsyncTransport for SmolTransport {
 
     async fn delay(&mut self, duration: Duration) {
         smol::Timer::after(duration).await;
+    }
+}
+
+impl AsyncBaudConfigurable for SmolTransport {
+    async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
+        use serialport::SerialPort;
+        // get_mut() waits until in-flight thread-pool operations complete and returns &mut TTYPort.
+        let port = self.port.get_mut().await;
+        port.set_baud_rate(rate.baud_u32())
+            .map_err(io::Error::other)
     }
 }

@@ -372,3 +372,45 @@ in Off mode.
 
 ### Result
 239 tests pass (41 unit + 71 sync + 70 async + 56 protocol + 1 doc). CI green. no_std builds pass.
+
+---
+
+## Round 13: baud() command + OI spec type/buffer fixes
+
+### Changes
+
+#### `BaudRate` enum + extension traits
+- Added `BaudRate` (codes 0-10, 300–115200 bps) to `create-oi-protocol/src/types.rs`
+- `encode_baud` in `command.rs` updated to accept `BaudRate` instead of raw `u8`
+- `BaudConfigurable` (sync, `#[cfg(feature="std")]`) and `AsyncBaudConfigurable` (async) extension traits added to `create-oi/src/transport.rs`
+- `baud()` available on `Create<M: SensorReadable, T: Transport + BaudConfigurable>` and async mirror
+- Per spec: sends BAUD opcode → waits 100ms → calls `transport.set_baud()`
+- `SerialTransport`, `TokioTransport`, `SmolTransport` all implement the extension trait
+- Mock transports updated with `last_set_baud: Option<BaudRate>` for test assertions
+
+#### `encode_motors_pwm` vacuum type: `i8` → `u8`
+- `vacuum` parameter changed from `i8` to `u8` at both protocol and high-level API layers
+- API validation changed from `vacuum < 0` to `vacuum > 127`
+- This is a breaking change: callers passing `-1` or `i8::MIN` must now pass `128` or `255`
+- Tests updated to use `vacuum = 128` and `vacuum = 255` as invalid values
+
+#### async `query_sensor()` — explicit group ID rejection
+- Added upfront validation: group packet IDs (0-6, 100) return `ValidationError` with helpful message
+- Previously would fail at `decode_packet()` with confusing `UnknownPacketId` error
+- Same fix applied to sync `query_sensor()` in `create.rs`
+
+#### async `query_list()` / `start_stream()` — alloc removes 52-ID cap
+- `#[cfg(feature = "alloc")]` path uses `Vec`-based command buffers (up to 255 IDs)
+- `#[cfg(not(feature = "alloc"))]` path keeps 52-ID stack buffer with updated error message
+- Tests updated: "too many IDs" tests now use protocol-level limits (256 IDs for `query_list`, 128×packet-8 for `start_stream` payload > 255 bytes)
+
+### Tests added (6 sync baud + 4 async baud = 10 new tests)
+
+- `baud_rate_from_code_round_trip` / `baud_rate_baud_u32_all_codes` (protocol unit tests, counted above)
+- `baud_sends_correct_bytes_and_calls_set_baud` / `async_baud_sends_correct_bytes_and_calls_set_baud`
+- `baud_available_from_passive_mode` / `async_baud_available_from_passive_mode`
+- `baud_available_from_safe_mode` / `async_baud_available_from_safe_mode`
+- `baud_available_from_full_mode` / `async_baud_available_from_full_mode`
+
+### Result
+248 tests pass (41 unit + 77 sync + 74 async + 56 protocol + 1 doc). CI green. no_std builds pass.

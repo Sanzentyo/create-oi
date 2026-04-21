@@ -58,5 +58,5 @@ pub mod prelude {
     pub use crate::opcode::Opcode;
     pub use crate::sensor::SensorData;
     pub use crate::stream::StreamParser;
-    pub use crate::types::{ChargingState, IrChar, OiMode};
+    pub use crate::types::{BaudRate, ChargingState, IrChar, OiMode};
 }

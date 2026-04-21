@@ -15,15 +15,17 @@
 
 use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
-use crate::transport::AsyncTransport;
+use crate::transport::{AsyncBaudConfigurable, AsyncTransport};
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
     PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
 };
 use core::marker::PhantomData;
+use core::time::Duration;
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
+use create_oi_protocol::types::BaudRate;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -359,9 +361,18 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Query a single sensor packet and decode it.
+    ///
+    /// Group packet IDs (0-6, 100) are not supported by this typed decode API;
+    /// use `query_sensor_raw()` to receive raw bytes for group packets.
     #[must_use = "query result must be used"]
     pub async fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<T::Error>> {
-        let mut buf = [0u8; 64]; // largest single packet is well under 64 bytes
+        if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_id",
+                reason: "group packet IDs (0-6, 100) are not decoded by query_sensor(); use query_sensor_raw() instead",
+            }));
+        }
+        let mut buf = [0u8; 64]; // largest individual packet is well under 64 bytes
         let len = self.query_sensor_raw_into(packet_id, &mut buf).await?;
         let mut sd = SensorData::default();
         sd.decode_packet(packet_id, &buf[..len])?;
@@ -371,27 +382,44 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query multiple sensors at once and decode all of them.
     ///
     /// Validates all packet IDs before sending any bytes to the robot.
+    /// Returns `ValidationError` if a sensor stream is currently active.
     ///
-    /// # Limits
-    ///
-    /// This async implementation uses a fixed stack buffer sized for the
-    /// largest OI sensor group (Group-100, 52 packet IDs). Passing more
-    /// than 52 IDs returns a `ValidationError`. For longer lists, use the
-    /// sync `Create::query_list` which allocates a `Vec`.
+    /// When the `alloc` feature is enabled this method accepts up to 255 IDs,
+    /// matching the sync `Create::query_list` behaviour.  Without `alloc` the
+    /// implementation uses a fixed stack buffer limited to 52 IDs (the size of
+    /// Group-100); passing more IDs returns a `ValidationError`.
+    #[cfg(feature = "alloc")]
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
         self.reject_if_streaming()?;
-        // Cap at Group-100 size to match the stack buffer below.
+        let expected_len = sensor::expected_data_len(packet_ids)?;
+        let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
+        self.send_cmd(&cmd).await?;
+
+        let mut buf = vec![0u8; expected_len];
+        self.read_exact(&mut buf).await?;
+
+        let mut sd = SensorData::default();
+        sd.decode_packets(packet_ids, &buf)?;
+        Ok(sd)
+    }
+
+    /// Query multiple sensors at once and decode all of them (no-alloc variant).
+    ///
+    /// Uses a fixed stack buffer; limited to at most 52 packet IDs.
+    /// Enable the `alloc` feature to remove this limit.
+    #[cfg(not(feature = "alloc"))]
+    #[must_use = "query result must be used"]
+    pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+        self.reject_if_streaming()?;
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
-                reason: "async query_list supports at most 52 packet IDs; use sync API for longer lists",
+                reason: "async query_list supports at most 52 packet IDs without alloc; enable the alloc feature for longer lists",
             }));
         }
-        // Validate packet IDs and compute expected response length BEFORE sending.
         let expected_len = sensor::expected_data_len(packet_ids)?;
-        // Group-100 has 52 IDs — the largest valid group. Stack-buffer accordingly.
         const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut cmd_buf = [0u8; MAX_CMD];
         let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
@@ -420,11 +448,44 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// if the packet ID list exceeds the protocol limit, or if the total
     /// stream payload per cycle would exceed 255 bytes.
     ///
-    /// # Limits
+    /// When the `alloc` feature is enabled this method accepts up to 255 IDs.
+    /// Without `alloc` the implementation uses a fixed stack buffer limited
+    /// to 52 IDs (the size of Group-100).
+    #[cfg(feature = "alloc")]
+    pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        let payload_bytes =
+            packet_ids
+                .iter()
+                .try_fold(0usize, |acc, &id| -> Result<usize, Error<T::Error>> {
+                    let info =
+                        create_oi_protocol::opcode::packet_info(id).ok_or(Error::Protocol(
+                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                        ))?;
+                    Ok(acc + 1 + info.len as usize)
+                })?;
+        if payload_bytes > 255 {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "stream payload per cycle exceeds OI limit of 255 bytes",
+            }));
+        }
+        let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
+        self.send_cmd(&cmd).await?;
+        self.streaming = true;
+        Ok(())
+    }
+
+    /// Start streaming the given packet IDs (no-alloc variant).
     ///
-    /// This async implementation uses a fixed stack buffer sized for the
-    /// largest OI sensor group (Group-100, 52 packet IDs). Passing more
-    /// than 52 IDs returns a `ValidationError`.
+    /// Uses a fixed stack buffer; limited to at most 52 packet IDs.
+    /// Enable the `alloc` feature to remove this limit.
+    #[cfg(not(feature = "alloc"))]
     pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
@@ -452,7 +513,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         if packet_ids.len() > ASYNC_MAX_IDS {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
-                reason: "async start_stream supports at most 52 packet IDs; use sync API for longer lists",
+                reason: "async start_stream supports at most 52 packet IDs without alloc; enable the alloc feature for longer lists",
             }));
         }
         const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
@@ -709,7 +770,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// - `main_brush` and `side_brush`: range -127..=127 (i8::MIN = -128 is rejected).
     ///   Positive = forward direction, negative = reverse.
-    /// - `vacuum`: range 0..=127. Negative values are invalid per the OI spec
+    /// - `vacuum`: range 0..=127. Values above 127 are invalid per the OI spec
     ///   (vacuum runs in one direction only) and are rejected without sending.
     ///
     /// Returns `ValidationError` if this model is not Create 2 (OPCODE 144 is
@@ -718,7 +779,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         &mut self,
         main_brush: i8,
         side_brush: i8,
-        vacuum: i8,
+        vacuum: u8,
     ) -> Result<(), Error<T::Error>> {
         if !self.model.is_create2() {
             return Err(Error::Validation(ValidationError {
@@ -734,10 +795,10 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
                 }));
             }
         }
-        if vacuum < 0 {
+        if vacuum > 127 {
             return Err(Error::Validation(ValidationError {
                 field: "vacuum",
-                reason: "vacuum PWM must be 0..=127; negative values are invalid per OI spec",
+                reason: "vacuum PWM must be 0..=127; values above 127 are invalid per OI spec",
             }));
         }
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
@@ -953,6 +1014,31 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
             }
         }
         self.send_cmd(&command::encode_schedule(days, times)).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Baud-rate switching (Passive, Safe, Full) — requires AsyncBaudConfigurable
+// ---------------------------------------------------------------------------
+
+impl<M: SensorReadable, T: AsyncTransport + AsyncBaudConfigurable> AsyncCreate<M, T> {
+    /// Change the robot's baud rate (opcode 129).
+    ///
+    /// Sends the `BAUD` command, waits 100 ms for the robot to switch, then
+    /// reconfigures the host serial connection to the new rate via
+    /// [`AsyncBaudConfigurable::set_baud`].
+    ///
+    /// Available from Passive, Safe, and Full modes. The mode is unchanged after
+    /// this call. All further commands must be sent at the new baud rate.
+    ///
+    /// # Note
+    ///
+    /// This method requires the transport to implement [`AsyncBaudConfigurable`].
+    /// Tokio and smol transports support this; Embassy transports do not.
+    pub async fn baud(&mut self, rate: BaudRate) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_baud(rate)).await?;
+        self.transport.delay(Duration::from_millis(100)).await;
+        self.transport.set_baud(rate).await.map_err(Error::Io)
     }
 }
 

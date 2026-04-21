@@ -6,7 +6,8 @@
 use std::io;
 use std::time::Duration;
 
-use create_oi::transport::Transport;
+use create_oi::protocol::types::BaudRate;
+use create_oi::transport::{BaudConfigurable, Transport};
 use create_oi::types::RobotModel;
 
 /// Re-export core types for convenience.
@@ -69,6 +70,14 @@ impl Transport for SerialTransport {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         self.port
             .set_timeout(timeout.unwrap_or(Duration::from_secs(u64::MAX)))
+            .map_err(io::Error::other)
+    }
+}
+
+impl BaudConfigurable for SerialTransport {
+    fn set_baud(&mut self, rate: BaudRate) -> io::Result<()> {
+        self.port
+            .set_baud_rate(rate.baud_u32())
             .map_err(io::Error::other)
     }
 }

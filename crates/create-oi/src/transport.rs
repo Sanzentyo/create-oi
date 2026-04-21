@@ -15,6 +15,8 @@
 use core::fmt;
 use core::time::Duration;
 
+use create_oi_protocol::types::BaudRate;
+
 /// Asynchronous transport for communicating with the robot.
 ///
 /// This trait bundles async read/write/flush plus a timer abstraction.
@@ -73,4 +75,32 @@ pub trait Transport: fmt::Debug + Send {
 
     /// Set the read timeout. `None` means blocking forever.
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()>;
+}
+
+/// Extension trait for [`Transport`] implementations that support runtime baud-rate switching.
+///
+/// Implement this alongside [`Transport`] if your serial driver supports changing
+/// the baud rate after the port is opened. Transports that do not implement this trait
+/// cannot use the [`Create::baud`](crate::create::Create::baud) command.
+///
+/// # Protocol sequence
+///
+/// 1. Send OI `BAUD` opcode + baud code byte.
+/// 2. Wait 100 ms (the robot switches baud rate after this delay).
+/// 3. Call `set_baud()` to reconfigure the host serial port.
+#[cfg(feature = "std")]
+pub trait BaudConfigurable: Transport {
+    /// Reconfigure the serial connection to the given baud rate.
+    fn set_baud(&mut self, rate: BaudRate) -> std::io::Result<()>;
+}
+
+/// Extension trait for [`AsyncTransport`] implementations that support runtime baud-rate switching.
+///
+/// Implement this alongside [`AsyncTransport`] if your async serial driver supports changing
+/// the baud rate after the connection is opened. Transports that do not implement this trait
+/// cannot use the [`AsyncCreate::baud`](crate::async_create::AsyncCreate::baud) command.
+#[allow(async_fn_in_trait)]
+pub trait AsyncBaudConfigurable: AsyncTransport {
+    /// Reconfigure the serial connection to the given baud rate.
+    async fn set_baud(&mut self, rate: BaudRate) -> Result<(), Self::Error>;
 }

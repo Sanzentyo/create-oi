@@ -5,7 +5,8 @@
 
 use std::io;
 
-use create_oi::transport::AsyncTransport;
+use create_oi::protocol::types::BaudRate;
+use create_oi::transport::{AsyncBaudConfigurable, AsyncTransport};
 use create_oi::types::RobotModel;
 
 /// Re-export core types for convenience.
@@ -47,5 +48,12 @@ impl AsyncTransport for TokioTransport {
 
     async fn delay(&mut self, duration: std::time::Duration) {
         tokio::time::sleep(duration).await;
+    }
+}
+
+impl AsyncBaudConfigurable for TokioTransport {
+    async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
+        tokio_serial::SerialPort::set_baud_rate(&mut self.port, rate.baud_u32())
+            .map_err(io::Error::other)
     }
 }
