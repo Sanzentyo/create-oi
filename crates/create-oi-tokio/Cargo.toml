@@ -30,3 +30,23 @@ path = "examples/stream_tokio.rs"
 name = "leds_tokio"
 path = "examples/leds_tokio.rs"
 
+[[example]]
+name = "songs_tokio"
+path = "examples/songs_tokio.rs"
+
+[[example]]
+name = "full_tokio"
+path = "examples/full_tokio.rs"
+
+[[example]]
+name = "sensors_tokio"
+path = "examples/sensors_tokio.rs"
+
+[[example]]
+name = "schedule_tokio"
+path = "examples/schedule_tokio.rs"
+
+[[example]]
+name = "dock_tokio"
+path = "examples/dock_tokio.rs"
+

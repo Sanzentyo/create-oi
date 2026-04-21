@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```text
-//! cargo run --example round_smol -- /dev/ttyUSB0
+//! cargo run --example stream_smol -- /dev/ttyUSB0
 //! ```
 
 use create_oi_smol::SmolTransport;

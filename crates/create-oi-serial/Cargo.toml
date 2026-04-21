@@ -21,8 +21,8 @@ name = "basic_sync"
 path = "examples/basic_sync.rs"
 
 [[example]]
-name = "round_sync"
-path = "examples/round_sync.rs"
+name = "dock_sync"
+path = "examples/dock_sync.rs"
 
 [[example]]
 name = "leds_sync"

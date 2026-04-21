@@ -40,6 +40,140 @@
 //! Configure the UART baud rate (57600 for Create 1, 115200 for Create 2)
 //! **before** passing the peripheral to the transport. This crate does not
 //! perform baud-rate configuration.
+//!
+//! # LEDs
+//!
+//! The following snippets assume you are inside an `#[embassy_executor::main]`
+//! task with `robot: AsyncCreate<Safe, EmbassyTransport<...>>` already in
+//! scope.
+//!
+//! ```rust,ignore
+//! // All status LEDs on, power LED red at full brightness
+//! robot.set_leds(true, true, true, true, PowerLedColor::RED, LedIntensity::new(255)).await?;
+//!
+//! // Day-of-week and schedule icon LEDs (Create 2 only)
+//! // day_leds: bits 0-6 = Sun-Sat; schedule_leds: bit0=colon, bit1=AM/PM
+//! robot.set_scheduling_leds(0b000_1010, 0b0000_0011).await?; // Mon + Wed + colon + AM/PM
+//! robot.set_scheduling_leds(0, 0).await?; // clear
+//!
+//! // Four-digit ASCII display (Create 2 only)
+//! robot.set_digit_leds(b'O', b'I', b' ', b' ').await?;
+//!
+//! // Four-digit raw segment bits — each byte encodes segments A-G (bits 0-6)
+//! robot.set_digit_leds_raw(0x7F, 0x7F, 0x7F, 0x7F).await?; // all segments on
+//! robot.set_digit_leds_raw(0, 0, 0, 0).await?; // clear
+//! ```
+//!
+//! # Songs
+//!
+//! ```rust,ignore
+//! // Define song 0: C major scale (MIDI 60-72, 0.5 s per note at 32/64 s)
+//! let scale = [
+//!     SongNote::new(60, 32)?, SongNote::new(62, 32)?, SongNote::new(64, 32)?,
+//!     SongNote::new(65, 32)?, SongNote::new(67, 32)?, SongNote::new(69, 32)?,
+//!     SongNote::new(71, 32)?, SongNote::new(72, 32)?,
+//! ];
+//! robot.define_song(SongNumber::new(0)?, &scale).await?;
+//! robot.play_song(SongNumber::new(0)?).await?;
+//! ```
+//!
+//! # Full Mode
+//!
+//! ```rust,ignore
+//! // Transition Safe → Full (no safety cutoffs)
+//! let mut robot = robot.to_full().await.map_err(|e| e.source)?;
+//!
+//! // Per-wheel velocity: right 0.15 m/s, left 0.08 m/s → gentle left arc
+//! robot.drive_direct(Velocity::new(0.15)?, Velocity::new(0.08)?).await?;
+//!
+//! // cmd_vel-style: 0.2 m/s forward, 0.5 rad/s left turn
+//! robot.drive_twist(Velocity::new(0.2)?, AngularVelocity::new(0.5)?).await?;
+//!
+//! // Cleaning brushes on
+//! robot.set_motors(MotorBits { side_brush: true, vacuum: true, main_brush: true,
+//!                              side_brush_backward: false, main_brush_backward: false }).await?;
+//! robot.set_motors_pwm(64, 64, 64).await?; // ~50% PWM (Create 2 only)
+//! robot.set_motors(MotorBits::default()).await?; // all off
+//!
+//! // Simulate Spot button press (Full mode only)
+//! robot.simulate_buttons(ButtonBits { spot: true, ..ButtonBits::default() }).await?;
+//! robot.simulate_buttons(ButtonBits::default()).await?; // release
+//!
+//! // Return to Safe
+//! let robot = robot.to_safe().await.map_err(|e| e.source)?;
+//! ```
+//!
+//! # Sensor Streaming
+//!
+//! ```rust,ignore
+//! // Subscribe to bumps (7), voltage (22), OI mode (35)
+//! robot.start_stream(&[7, 22, 35]).await?;
+//!
+//! let mut frames = 0u32;
+//! let mut paused = false;
+//! while frames < 30 {
+//!     robot.poll_stream_with(|result| {
+//!         if let Ok(sd) = result {
+//!             frames += 1;
+//!             // process sd.voltage, sd.is_right_bump(), sd.oi_mode, …
+//!         }
+//!     }).await?;
+//!
+//!     if frames >= 15 && !paused {
+//!         paused = true;
+//!         robot.toggle_stream(false).await?; // pause
+//!         // … wait …
+//!         robot.toggle_stream(true).await?;  // resume
+//!     }
+//! }
+//! robot.toggle_stream(false).await?;
+//! ```
+//!
+//! # Sensor Queries
+//!
+//! ```rust,ignore
+//! // Single packet: battery voltage (packet 22)
+//! let sd = robot.query_sensor(22).await?;
+//! // sd.voltage is Option<u16>
+//!
+//! // Multiple packets in one round-trip
+//! let sd = robot.query_list(&[22, 23, 25, 26, 35]).await?;
+//! // sd.voltage, sd.current, sd.battery_charge, sd.battery_capacity, sd.oi_mode
+//!
+//! // Read OI mode directly
+//! let mode = robot.read_oi_mode().await?;
+//! ```
+//!
+//! # Scheduling
+//!
+//! ```rust,ignore
+//! // Set robot clock to Monday 09:30 (Create 2 only)
+//! robot.set_date(DayOfWeek::Monday, 9, 30).await?;
+//!
+//! // Program weekly schedule: Monday 09:30, Thursday 18:00
+//! // Bitmask: bit 0 = Sunday, bit 1 = Monday, …, bit 6 = Saturday
+//! let days = 0b001_0010_u8; // Monday + Thursday
+//! let times: [(u8, u8); 7] = [
+//!     (0, 0), (9, 30), (0, 0), (0, 0), (18, 0), (0, 0), (0, 0),
+//! ];
+//! robot.set_schedule(days, times).await?;
+//! robot.set_schedule(0, [(0, 0); 7]).await?; // clear
+//! ```
+//!
+//! # Autonomous Commands
+//!
+//! ```rust,ignore
+//! // Start a spot-clean cycle — transitions Safe → Passive
+//! let robot = robot.clean(CleanMode::Spot).await.map_err(|e| e.source)?;
+//!
+//! // Reclaim control (Safe aborts any ongoing autonomous operation)
+//! let mut robot = robot.to_safe().await.map_err(|e| e.source)?;
+//! robot.stop().await?;
+//!
+//! // Send robot to charging dock — also transitions Safe → Passive
+//! let _robot = robot.seek_dock().await.map_err(|e| e.source)?;
+//! // Poll packet 21 (ChargingState) to detect when docking is complete.
+//! ```
 
 #![no_std]
 

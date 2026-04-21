@@ -20,5 +20,30 @@ name = "basic_smol"
 required-features = []
 
 [[example]]
-name = "round_smol"
+name = "stream_smol"
 required-features = []
+
+[[example]]
+name = "leds_smol"
+required-features = []
+
+[[example]]
+name = "songs_smol"
+required-features = []
+
+[[example]]
+name = "full_smol"
+required-features = []
+
+[[example]]
+name = "sensors_smol"
+required-features = []
+
+[[example]]
+name = "schedule_smol"
+required-features = []
+
+[[example]]
+name = "dock_smol"
+required-features = []
+
