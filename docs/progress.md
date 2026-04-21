@@ -835,3 +835,51 @@ chunk has ended → never ignored.
 - `crates/create-oi-serial/examples/play_midi_sync.rs`
 - `crates/create-oi-tokio/examples/play_midi_tokio.rs`
 - `crates/create-oi-smol/examples/play_midi_smol.rs`
+
+---
+
+## Round 23 — MIDI Alternating Slots + Diagnostic Output
+
+### Problem: sequential single-slot still produced every-other silence
+
+Round 22 (single-slot sequential) still caused every other chunk to be
+inaudible.  Rubber-duck analysis identified the blind spot:
+
+**`play_start` is anchored to when the host *writes* `play_song` bytes, not
+when the robot *receives* them.**  USB-to-serial write latency on macOS can
+vary significantly (1–10+ ms).  With `SONG_TIMING_BUFFER = 3 ms`, the host
+woke up before the robot had even received the previous `play_song`, let alone
+finished playing the chunk.  This allowed `define_song` + `play_song` for the
+next chunk to arrive while the previous song was still active, possibly
+interrupting it mid-phrase or triggering undefined same-slot behaviour.
+
+### Contradictory documentation corrected
+
+Round 20 confirmed: `play_song` **interrupts** (does not queue) a playing song.
+Round 22 incorrectly wrote "ignored" — this note is retracted.
+
+### Changes
+
+1. **Alternating slots (0 / 1)** — eliminating same-slot reuse as a variable.
+2. **`SONG_TIMING_BUFFER` → 50 ms** — conservative value that accounts for
+   USB write latency variance on macOS; reduce once clean playback is confirmed.
+3. **Diagnostic output** — each chunk logs: slot index, note count, total
+   duration, MIDI pitch range.  Silent chunks can be cross-checked against
+   pitch / duration data.
+
+### Debugging guide
+
+After running with the new code:
+
+* If all chunks play → timing was the issue; reduce `SONG_TIMING_BUFFER`
+  until it breaks again, then set it 10–20 ms above that.
+* If every-other is still silent → not timing; inspect the printed pitch
+  ranges for the silent chunks (out-of-range or rest notes?).
+* If unrelated chunks are silent → different root cause; consider sensor
+  polling for `SONG_PLAYING` (packet 37) as ground truth.
+
+### Files changed
+
+- `crates/create-oi-serial/examples/play_midi_sync.rs`
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs`
+- `crates/create-oi-smol/examples/play_midi_smol.rs`
