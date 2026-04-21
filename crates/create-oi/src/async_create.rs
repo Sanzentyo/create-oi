@@ -13,7 +13,7 @@
 //! inconsistent. Prefer running transitions to completion or discarding
 //! the robot handle after cancellation.
 
-use crate::error::{ConnectError, Error, TransitionError};
+use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::AsyncTransport;
 use crate::types::{
@@ -175,13 +175,16 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query a single sensor packet by ID into a caller-provided buffer.
     ///
     /// Returns the number of bytes written to `buf`.
+    /// Query a single sensor packet by ID into a caller-provided buffer.
+    ///
+    /// Validates the packet ID and buffer size before sending any bytes to the robot.
+    /// Returns the number of bytes written.
+    #[must_use = "query result must be used"]
     pub async fn query_sensor_raw_into(
         &mut self,
         packet_id: u8,
         buf: &mut [u8],
     ) -> Result<usize, Error<T::Error>> {
-        self.send_cmd(&command::encode_sensors(packet_id)).await?;
-
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
@@ -194,12 +197,16 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 },
             ));
         }
+        self.send_cmd(&command::encode_sensors(packet_id)).await?;
         self.read_exact(&mut buf[..len]).await?;
         Ok(len)
     }
 
     /// Query a single sensor packet by ID and return the raw bytes.
+    ///
+    /// Validates the packet ID before sending any bytes to the robot.
     #[cfg(feature = "alloc")]
+    #[must_use = "query result must be used"]
     pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<T::Error>> {
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
@@ -211,6 +218,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Query a single sensor packet and decode it.
+    #[must_use = "query result must be used"]
     pub async fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<T::Error>> {
         let mut buf = [0u8; 64]; // largest single packet is well under 64 bytes
         let len = self.query_sensor_raw_into(packet_id, &mut buf).await?;
@@ -220,12 +228,19 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Query multiple sensors at once and decode all of them.
+    ///
+    /// Validates all packet IDs before sending any bytes to the robot.
+    /// Supports up to 52 packet IDs (the maximum in any OI sensor group).
+    #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
-        let mut cmd_buf = [0u8; 28];
+        // Validate packet IDs and compute expected response length BEFORE sending.
+        let expected_len = sensor::expected_data_len(packet_ids)?;
+        // Group-100 has 52 IDs — the largest valid group. Stack-buffer accordingly.
+        const MAX_CMD: usize = 2 + 52;
+        let mut cmd_buf = [0u8; MAX_CMD];
         let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
         self.send_cmd(&cmd_buf[..cmd_len]).await?;
 
-        let expected_len = sensor::expected_data_len(packet_ids)?;
         let mut buf = [0u8; 256];
         self.read_exact(&mut buf[..expected_len]).await?;
 
@@ -235,6 +250,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Read the robot's current OI mode from sensor data.
+    #[must_use = "query result must be used"]
     pub async fn read_oi_mode(&mut self) -> Result<OiMode, Error<T::Error>> {
         let sd = self.query_sensor(35).await?;
         sd.oi_mode.ok_or(Error::Protocol(
@@ -243,8 +259,18 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Start streaming the given packet IDs.
+    ///
+    /// Returns an error if this robot model does not support sensor streaming,
+    /// or if the packet ID list exceeds the protocol limit.
     pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
-        let mut buf = [0u8; 28];
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        const MAX_CMD: usize = 2 + 52;
+        let mut buf = [0u8; MAX_CMD];
         let len = command::encode_stream_into(&mut buf, packet_ids)?;
         self.send_cmd(&buf[..len]).await
     }
@@ -503,25 +529,61 @@ impl<M: FullControl, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Set the robot's internal date and time (Full mode only).
+    ///
+    /// Returns an error if `hour` is not 0–23 or `minute` is not 0–59.
     pub async fn set_date(
         &mut self,
         day: DayOfWeek,
         hour: u8,
         minute: u8,
     ) -> Result<(), Error<T::Error>> {
+        if hour > 23 {
+            return Err(Error::Validation(ValidationError {
+                field: "hour",
+                reason: "hour must be in range 0-23",
+            }));
+        }
+        if minute > 59 {
+            return Err(Error::Validation(ValidationError {
+                field: "minute",
+                reason: "minute must be in range 0-59",
+            }));
+        }
         self.send_cmd(&command::encode_date(day.to_raw(), hour, minute))
             .await
     }
 
     /// Set the weekly cleaning schedule (Full mode only).
     ///
-    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday).
+    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday). Bits 7 must be 0.
     /// `times`: (hour, minute) for each day, starting with Sunday.
+    ///
+    /// Returns an error if `days` has reserved bits set or any time is out of range.
     pub async fn set_schedule(
         &mut self,
         days: u8,
         times: [(u8, u8); 7],
     ) -> Result<(), Error<T::Error>> {
+        if days & !0x7F != 0 {
+            return Err(Error::Validation(ValidationError {
+                field: "days",
+                reason: "days bitmask must only use bits 0-6 (Sunday=0 … Saturday=6)",
+            }));
+        }
+        for &(h, m) in &times {
+            if h > 23 {
+                return Err(Error::Validation(ValidationError {
+                    field: "hour",
+                    reason: "hour must be in range 0-23",
+                }));
+            }
+            if m > 59 {
+                return Err(Error::Validation(ValidationError {
+                    field: "minute",
+                    reason: "minute must be in range 0-59",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_schedule(days, times)).await
     }
 }
@@ -592,6 +654,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Transition to a different mode (zero-cost: just changes the type parameter).
+    #[inline(always)]
     fn transition<N: Mode>(self) -> AsyncCreate<N, T> {
         AsyncCreate {
             transport: self.transport,

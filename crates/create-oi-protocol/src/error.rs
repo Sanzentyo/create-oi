@@ -40,6 +40,14 @@ pub enum ProtocolError {
         /// Actual buffer size provided.
         got: usize,
     },
+
+    /// The input contains more items than the OI protocol allows.
+    TooManyItems {
+        /// Maximum allowed number of items.
+        max: usize,
+        /// Number of items provided.
+        got: usize,
+    },
 }
 
 impl fmt::Display for ProtocolError {
@@ -62,6 +70,9 @@ impl fmt::Display for ProtocolError {
             }
             Self::BufferTooSmall { need, got } => {
                 write!(f, "buffer too small: need {need} bytes, got {got}")
+            }
+            Self::TooManyItems { max, got } => {
+                write!(f, "too many items: max {max}, got {got}")
             }
         }
     }

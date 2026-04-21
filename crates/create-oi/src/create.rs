@@ -7,7 +7,7 @@
 //!
 //! This module requires the `std` feature (blocking I/O + `thread::sleep`).
 
-use crate::error::{ConnectError, Error, TransitionError};
+use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::Transport;
 use crate::types::{
@@ -152,18 +152,48 @@ impl<T: Transport> Create<Full, T> {
 
 impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query a single sensor packet by ID and return the raw bytes.
+    ///
+    /// Validates the packet ID before sending any bytes to the robot.
+    #[must_use = "query result must be used"]
     pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<std::io::Error>> {
-        self.send_cmd(&command::encode_sensors(packet_id))?;
-
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
         let mut buf = vec![0u8; info.len as usize];
+        self.send_cmd(&command::encode_sensors(packet_id))?;
         self.read_exact(&mut buf)?;
         Ok(buf)
     }
 
+    /// Query a single sensor packet by ID into a caller-provided buffer.
+    ///
+    /// Validates the packet ID and buffer size before sending any bytes to the robot.
+    /// Returns the number of bytes written.
+    #[must_use = "query result must be used"]
+    pub fn query_sensor_raw_into(
+        &mut self,
+        packet_id: u8,
+        buf: &mut [u8],
+    ) -> Result<usize, Error<std::io::Error>> {
+        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
+            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+        ))?;
+        let len = info.len as usize;
+        if buf.len() < len {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::BufferTooSmall {
+                    need: len,
+                    got: buf.len(),
+                },
+            ));
+        }
+        self.send_cmd(&command::encode_sensors(packet_id))?;
+        self.read_exact(&mut buf[..len])?;
+        Ok(len)
+    }
+
     /// Query a single sensor packet and decode it.
+    #[must_use = "query result must be used"]
     pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<std::io::Error>> {
         let raw = self.query_sensor_raw(packet_id)?;
         let mut sd = SensorData::default();
@@ -172,10 +202,14 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Query multiple sensors at once and decode all of them.
+    ///
+    /// Validates all packet IDs before sending any bytes to the robot.
+    #[must_use = "query result must be used"]
     pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<std::io::Error>> {
-        self.send_cmd(&command::encode_query_list(packet_ids))?;
-
         let expected_len = sensor::expected_data_len(packet_ids)?;
+        let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
+        self.send_cmd(&cmd)?;
+
         let mut buf = vec![0u8; expected_len];
         self.read_exact(&mut buf)?;
 
@@ -185,6 +219,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Read the robot's current OI mode from sensor data.
+    #[must_use = "query result must be used"]
     pub fn read_oi_mode(&mut self) -> Result<OiMode, Error<std::io::Error>> {
         let sd = self.query_sensor(35)?;
         sd.oi_mode.ok_or(Error::Protocol(
@@ -193,8 +228,18 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Start streaming the given packet IDs.
+    ///
+    /// Returns an error if this robot model does not support sensor streaming,
+    /// or if the packet ID list exceeds the protocol limit.
     pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
-        self.send_cmd(&command::encode_stream(packet_ids))
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
+        self.send_cmd(&cmd)
     }
 
     /// Pause or resume the sensor stream.
@@ -372,7 +417,7 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         number: SongNumber,
         notes: &[(u8, u8)],
     ) -> Result<(), Error<std::io::Error>> {
-        let cmd = command::encode_song(number.get(), notes);
+        let cmd = command::encode_song(number.get(), notes).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)
     }
 
@@ -439,24 +484,60 @@ impl<M: FullControl, T: Transport> Create<M, T> {
     }
 
     /// Set the robot's internal date and time (Full mode only).
+    ///
+    /// Returns an error if `hour` is not 0–23 or `minute` is not 0–59.
     pub fn set_date(
         &mut self,
         day: DayOfWeek,
         hour: u8,
         minute: u8,
     ) -> Result<(), Error<std::io::Error>> {
+        if hour > 23 {
+            return Err(Error::Validation(ValidationError {
+                field: "hour",
+                reason: "hour must be in range 0-23",
+            }));
+        }
+        if minute > 59 {
+            return Err(Error::Validation(ValidationError {
+                field: "minute",
+                reason: "minute must be in range 0-59",
+            }));
+        }
         self.send_cmd(&command::encode_date(day.to_raw(), hour, minute))
     }
 
     /// Set the weekly cleaning schedule (Full mode only).
     ///
-    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday).
+    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday). Bits 7 must be 0.
     /// `times`: (hour, minute) for each day, starting with Sunday.
+    ///
+    /// Returns an error if `days` has reserved bits set or any time is out of range.
     pub fn set_schedule(
         &mut self,
         days: u8,
         times: [(u8, u8); 7],
     ) -> Result<(), Error<std::io::Error>> {
+        if days & !0x7F != 0 {
+            return Err(Error::Validation(ValidationError {
+                field: "days",
+                reason: "days bitmask must only use bits 0-6 (Sunday=0 … Saturday=6)",
+            }));
+        }
+        for &(h, m) in &times {
+            if h > 23 {
+                return Err(Error::Validation(ValidationError {
+                    field: "hour",
+                    reason: "hour must be in range 0-23",
+                }));
+            }
+            if m > 59 {
+                return Err(Error::Validation(ValidationError {
+                    field: "minute",
+                    reason: "minute must be in range 0-59",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_schedule(days, times))
     }
 }
@@ -523,6 +604,7 @@ impl<M: Mode, T: Transport> Create<M, T> {
     }
 
     /// Transition to a different mode (zero-cost: just changes the type parameter).
+    #[inline(always)]
     fn transition<N: Mode>(self) -> Create<N, T> {
         Create {
             transport: self.transport,

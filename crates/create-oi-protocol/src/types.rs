@@ -2,6 +2,8 @@
 //!
 //! These are raw protocol values, not validated physical quantities.
 
+use core::fmt;
+
 // ---------------------------------------------------------------------------
 // OI mode (runtime value from sensor data, packet 35)
 // ---------------------------------------------------------------------------
@@ -36,6 +38,15 @@ impl OiMode {
             Self::Safe => "Safe",
             Self::Full => "Full",
             Self::Unknown(_) => "Unknown",
+        }
+    }
+}
+
+impl fmt::Display for OiMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(x) => write!(f, "Unknown({x})"),
+            _ => f.write_str(self.name()),
         }
     }
 }
@@ -84,6 +95,15 @@ impl ChargingState {
     }
 }
 
+impl fmt::Display for ChargingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(x) => write!(f, "Unknown({x})"),
+            _ => f.write_str(self.name()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Clean mode
 // ---------------------------------------------------------------------------
@@ -116,6 +136,25 @@ impl DayOfWeek {
     #[inline(always)]
     pub const fn to_raw(self) -> u8 {
         self as u8
+    }
+
+    #[inline(always)]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Sunday => "Sunday",
+            Self::Monday => "Monday",
+            Self::Tuesday => "Tuesday",
+            Self::Wednesday => "Wednesday",
+            Self::Thursday => "Thursday",
+            Self::Friday => "Friday",
+            Self::Saturday => "Saturday",
+        }
+    }
+}
+
+impl fmt::Display for DayOfWeek {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -192,6 +231,15 @@ impl IrChar {
             Self::BuoyRedAndForceField => "BuoyRedAndForceField",
             Self::BuoyGreenRedAndForceField => "BuoyGreenRedAndForceField",
             Self::Unknown(_) => "Unknown",
+        }
+    }
+}
+
+impl fmt::Display for IrChar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(x) => write!(f, "Unknown({x})"),
+            _ => f.write_str(self.name()),
         }
     }
 }

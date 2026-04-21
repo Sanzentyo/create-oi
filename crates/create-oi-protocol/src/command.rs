@@ -190,7 +190,7 @@ pub const fn encode_schedule(days: u8, times: [(u8, u8); 7]) -> [u8; 16] {
 /// Define a song. Writes into `buf` and returns the number of bytes written.
 ///
 /// `song_number`: 0-3
-/// `notes`: pairs of (MIDI note, duration_64ths)
+/// `notes`: pairs of (MIDI note, duration_64ths). Maximum 16 notes per OI spec.
 ///
 /// Required buffer size: `3 + notes.len() * 2`
 pub fn encode_song_into(
@@ -198,6 +198,12 @@ pub fn encode_song_into(
     song_number: u8,
     notes: &[(u8, u8)],
 ) -> Result<usize, ProtocolError> {
+    if notes.len() > 16 {
+        return Err(ProtocolError::TooManyItems {
+            max: 16,
+            got: notes.len(),
+        });
+    }
     let need = 3 + notes.len() * 2;
     if buf.len() < need {
         return Err(ProtocolError::BufferTooSmall {
@@ -218,9 +224,15 @@ pub fn encode_song_into(
 /// Define a song. Returns a `Vec<u8>`.
 ///
 /// `song_number`: 0-3
-/// `notes`: pairs of (MIDI note, duration_64ths)
+/// `notes`: pairs of (MIDI note, duration_64ths). Maximum 16 notes per OI spec.
 #[cfg(feature = "alloc")]
-pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Vec<u8> {
+pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Result<Vec<u8>, ProtocolError> {
+    if notes.len() > 16 {
+        return Err(ProtocolError::TooManyItems {
+            max: 16,
+            got: notes.len(),
+        });
+    }
     let mut buf = Vec::with_capacity(3 + notes.len() * 2);
     buf.push(Opcode::Song as u8);
     buf.push(song_number);
@@ -229,7 +241,7 @@ pub fn encode_song(song_number: u8, notes: &[(u8, u8)]) -> Vec<u8> {
         buf.push(note);
         buf.push(duration);
     }
-    buf
+    Ok(buf)
 }
 
 /// Play a previously defined song.
@@ -246,8 +258,15 @@ pub const fn encode_sensors(packet_id: u8) -> [u8; 2] {
 
 /// Request multiple sensor packets (query list). Writes into `buf`.
 ///
+/// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
 pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    if packet_ids.len() > 255 {
+        return Err(ProtocolError::TooManyItems {
+            max: 255,
+            got: packet_ids.len(),
+        });
+    }
     let need = 2 + packet_ids.len();
     if buf.len() < need {
         return Err(ProtocolError::BufferTooSmall {
@@ -262,19 +281,34 @@ pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize
 }
 
 /// Request multiple sensor packets (query list). Returns a `Vec<u8>`.
+///
+/// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
-pub fn encode_query_list(packet_ids: &[u8]) -> Vec<u8> {
+pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    if packet_ids.len() > 255 {
+        return Err(ProtocolError::TooManyItems {
+            max: 255,
+            got: packet_ids.len(),
+        });
+    }
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::QueryList as u8);
     buf.push(packet_ids.len() as u8);
     buf.extend_from_slice(packet_ids);
-    buf
+    Ok(buf)
 }
 
 /// Start a sensor stream with the given packet IDs. Writes into `buf`.
 ///
+/// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
 pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+    if packet_ids.len() > 255 {
+        return Err(ProtocolError::TooManyItems {
+            max: 255,
+            got: packet_ids.len(),
+        });
+    }
     let need = 2 + packet_ids.len();
     if buf.len() < need {
         return Err(ProtocolError::BufferTooSmall {
@@ -289,13 +323,21 @@ pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, Pr
 }
 
 /// Start a sensor stream with the given packet IDs. Returns a `Vec<u8>`.
+///
+/// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
-pub fn encode_stream(packet_ids: &[u8]) -> Vec<u8> {
+pub fn encode_stream(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    if packet_ids.len() > 255 {
+        return Err(ProtocolError::TooManyItems {
+            max: 255,
+            got: packet_ids.len(),
+        });
+    }
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::Stream as u8);
     buf.push(packet_ids.len() as u8);
     buf.extend_from_slice(packet_ids);
-    buf
+    Ok(buf)
 }
 
 /// Pause or resume the sensor stream.
@@ -373,8 +415,14 @@ mod tests {
     #[test]
     fn song_encode() {
         let notes = [(60, 32), (64, 32)];
-        let cmd = encode_song(0, &notes);
+        let cmd = encode_song(0, &notes).unwrap();
         assert_eq!(cmd, [140, 0, 2, 60, 32, 64, 32]);
+    }
+
+    #[test]
+    fn song_encode_too_many_notes() {
+        let notes = [(60u8, 32u8); 17];
+        assert!(encode_song(0, &notes).is_err());
     }
 
     #[test]
@@ -385,13 +433,13 @@ mod tests {
 
     #[test]
     fn query_list() {
-        let cmd = encode_query_list(&[7, 8, 35]);
+        let cmd = encode_query_list(&[7, 8, 35]).unwrap();
         assert_eq!(cmd, [149, 3, 7, 8, 35]);
     }
 
     #[test]
     fn stream_encode() {
-        let cmd = encode_stream(&[7, 8, 9]);
+        let cmd = encode_stream(&[7, 8, 9]).unwrap();
         assert_eq!(cmd, [148, 3, 7, 8, 9]);
     }
 

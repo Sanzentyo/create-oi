@@ -138,6 +138,16 @@ impl CreateRobotModel {
     }
 }
 
+impl core::fmt::Display for CreateRobotModel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Roomba400 => f.write_str("Roomba400"),
+            Self::Create1 => f.write_str("Create1"),
+            Self::Create2 => f.write_str("Create2"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Validated newtypes
 // ---------------------------------------------------------------------------
@@ -180,6 +190,12 @@ impl TryFrom<f32> for Velocity {
     }
 }
 
+impl core::fmt::Display for Velocity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:.3} m/s", self.0)
+    }
+}
+
 /// Angular velocity in rad/s. Valid range: [-π, π].
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct AngularVelocity(f32);
@@ -197,6 +213,12 @@ impl AngularVelocity {
     #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
+    }
+}
+
+impl core::fmt::Display for AngularVelocity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:.3} rad/s", self.0)
     }
 }
 
@@ -277,6 +299,17 @@ impl Radius {
     }
 }
 
+impl core::fmt::Display for Radius {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Straight => f.write_str("straight"),
+            Self::TurnInPlaceCw => f.write_str("turn-cw"),
+            Self::TurnInPlaceCcw => f.write_str("turn-ccw"),
+            Self::Curve(m) => write!(f, "{:.3} m", m),
+        }
+    }
+}
+
 /// Motor power level. Valid range: [-1.0, 1.0].
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct MotorPower(f32);
@@ -300,6 +333,12 @@ impl MotorPower {
     /// Convert to PWM value (-255..255) for the OI protocol (rounds to nearest).
     pub fn to_pwm(self) -> i16 {
         libm::roundf(self.0 * OI_MAX_PWM as f32) as i16
+    }
+}
+
+impl core::fmt::Display for MotorPower {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:.3}", self.0)
     }
 }
 
@@ -336,6 +375,12 @@ impl From<PowerLedColor> for u8 {
     }
 }
 
+impl core::fmt::Display for PowerLedColor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// LED intensity (0 = off, 255 = full brightness).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedIntensity(u8);
@@ -366,6 +411,12 @@ impl From<LedIntensity> for u8 {
     #[inline(always)]
     fn from(i: LedIntensity) -> u8 {
         i.0
+    }
+}
+
+impl core::fmt::Display for LedIntensity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -401,6 +452,12 @@ impl From<SongNumber> for u8 {
     #[inline(always)]
     fn from(s: SongNumber) -> u8 {
         s.0
+    }
+}
+
+impl core::fmt::Display for SongNumber {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
