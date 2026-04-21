@@ -1,22 +1,8 @@
 //! Play a MIDI file on the robot using `SmolTransport`.
 //!
-//! Reads a Standard MIDI File (SMF), converts it to robot song notes, and
-//! plays them sequentially through the robot's built-in speaker.
-//!
-//! Songs are uploaded in chunks of up to 16 notes (the OI limit per song
-//! slot).  Two slots are alternated in a **double-buffer** pattern: while
-//! slot A is playing, slot B is already pre-loaded with the next chunk so
-//! each transition fires only the 2-byte `PLAY_SONG` command with no
-//! upload latency, reducing inter-chunk gaps from ~33 ms to ~5 ms.
-//!
-//! # Usage
-//!
-//! ```text
-//! cargo run --example play_midi_smol --features midi -- /dev/ttyUSB0 [song.mid]
-//! ```
-//!
-//! When no MIDI path is given the bundled CC0 demo file
-//! (`assets/midi/game-over.mid`) is used.
+//! See `play_midi_sync` for a detailed explanation of the double-buffer /
+//! time-based playback strategy.  This variant uses smol async I/O and
+//! `smol::Timer::after` for the chunk-duration wait.
 
 use std::env;
 use std::mem;
@@ -26,10 +12,17 @@ use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_smol::SmolTransport;
 
-/// How often to poll `SONG_PLAYING` while waiting for a chunk to finish.
-const SONG_POLL_INTERVAL: Duration = Duration::from_millis(5);
-/// Extra timeout headroom added on top of the expected chunk duration.
-const SONG_TIMEOUT_EXTRA: Duration = Duration::from_secs(2);
+/// See `play_midi_sync` for rationale.
+const SONG_TIMING_BUFFER: Duration = Duration::from_millis(3);
+
+fn chunk_duration(chunk: &[SongNote]) -> Duration {
+    Duration::from_micros(
+        chunk
+            .iter()
+            .map(|note: &SongNote| u64::from(note.duration_64ths()) * 15_625)
+            .sum::<u64>(),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {
@@ -43,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         println!("Reading {path}…");
-        let bytes = smol::fs::read(&path).await?;
+        let bytes = std::fs::read(&path)?;
 
         let notes = midi_to_notes(&bytes, &MidiConfig::default())?;
         println!("{} notes parsed from MIDI file", notes.len());
@@ -69,44 +62,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             create.define_song(preloaded_slot, &chunks[1]).await?;
         }
         create.play_song(playing_slot).await?;
+        let mut play_start = Instant::now();
 
         for i in 0..n {
-            // Exact duration: each robot unit = 1/64 s = 15 625 µs.
-            let chunk_duration = Duration::from_micros(
-                chunks[i]
-                    .iter()
-                    .map(|note| u64::from(note.duration_64ths()) * 15_625)
-                    .sum::<u64>(),
-            );
-
+            let dur = chunk_duration(&chunks[i]);
             println!(
-                "Chunk {}/{}: {} notes, {:.2}s",
+                "Chunk {}/{}: {} notes, {:.3}s",
                 i + 1,
                 n,
                 chunks[i].len(),
-                chunk_duration.as_secs_f64()
+                dur.as_secs_f64()
             );
 
-            // Poll SONG_PLAYING (packet 37) until the robot signals it has finished.
-            let started = Instant::now();
-            let mut saw_playing = false;
-            loop {
-                let sensor = create.query_sensor(37).await?;
-                match sensor.song_playing {
-                    Some(true) => saw_playing = true,
-                    Some(false) if saw_playing || started.elapsed() >= chunk_duration => break,
-                    _ => {}
-                }
-                if started.elapsed() >= chunk_duration + SONG_TIMEOUT_EXTRA {
-                    eprintln!("Warning: timed out on chunk {}/{}", i + 1, n);
-                    break;
-                }
-                smol::Timer::after(SONG_POLL_INTERVAL).await;
+            let target = dur + SONG_TIMING_BUFFER;
+            let elapsed = play_start.elapsed();
+            if target > elapsed {
+                smol::Timer::after(target - elapsed).await;
             }
 
             if i + 1 < n {
                 mem::swap(&mut playing_slot, &mut preloaded_slot);
                 create.play_song(playing_slot).await?;
+                play_start = Instant::now();
 
                 if i + 2 < n {
                     create.define_song(preloaded_slot, &chunks[i + 2]).await?;

@@ -3,11 +3,31 @@
 //! Reads a Standard MIDI File (SMF), converts it to robot song notes, and
 //! plays the notes sequentially through the robot's built-in speaker.
 //!
+//! ## Playback strategy
+//!
 //! Songs are uploaded in chunks of up to 16 notes (the OI limit per song
-//! slot).  Two slots are alternated in a **double-buffer** pattern: while
-//! slot A is playing, slot B is already pre-loaded with the next chunk so
-//! each transition fires only the 2-byte `PLAY_SONG` command with no
-//! upload latency, reducing inter-chunk gaps from ~33 ms to ~5 ms.
+//! slot).  Two slots are alternated in a **double-buffer** pattern combined
+//! with **time-based** (non-polling) chunk transitions:
+//!
+//! * While slot A is playing the current chunk, slot B is already pre-loaded
+//!   with the next chunk.
+//! * Transition: at the expected end of the current chunk, issue
+//!   `PLAY_SONG(slot B)` immediately (2-byte write, ~0.2 ms).
+//! * The pre-load of the next-next chunk into the now-free slot happens
+//!   during the new chunk's playback (no gap contribution).
+//!
+//! **Why time-based instead of polling?**
+//! On macOS (and Linux), USB-to-serial adapters buffer read data for up to
+//! 15–20 ms in the kernel/driver before delivering it to userspace.  Each
+//! `query_sensor` round-trip therefore has ~10–20 ms jitter *independent* of
+//! the poll interval — the poll interval only sets the lower bound, not the
+//! actual latency.  Since each chunk duration (OI unit = 1/64 s = 15.625 ms)
+//! is exactly known from the MIDI data, sleeping for that duration is more
+//! accurate than polling.
+//!
+//! Expected gap per chunk transition:
+//! * Polling approach: 10–30 ms (USB driver latency)
+//! * Time-based approach: ~1–5 ms (OS sleep jitter only)
 //!
 //! # Usage
 //!
@@ -27,10 +47,20 @@ use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_serial::SerialTransport;
 
-/// How often to poll `SONG_PLAYING` while waiting for a chunk to finish.
-const SONG_POLL_INTERVAL: Duration = Duration::from_millis(5);
-/// Extra timeout headroom added on top of the expected chunk duration.
-const SONG_TIMEOUT_EXTRA: Duration = Duration::from_secs(2);
+/// Small buffer added to each chunk's sleep duration so that the
+/// `PLAY_SONG` command never arrives before the current chunk has actually
+/// finished playing.  Needs to exceed OS sleep jitter (~2 ms on most
+/// systems) plus serial write latency (~1 ms at 115200 baud).
+const SONG_TIMING_BUFFER: Duration = Duration::from_millis(3);
+
+fn chunk_duration(chunk: &[SongNote]) -> Duration {
+    Duration::from_micros(
+        chunk
+            .iter()
+            .map(|note: &SongNote| u64::from(note.duration_64ths()) * 15_625)
+            .sum::<u64>(),
+    )
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::args().nth(1).unwrap_or_else(|| "/dev/ttyUSB0".into());
@@ -61,9 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let create = create.start().map_err(|e| e.source)?;
     let mut create = create.to_safe().map_err(|e| e.source)?;
 
-    // Double-buffer: slots alternate between "playing" and "pre-loaded".
-    // The free slot is overwritten with chunk[i+2] while chunk[i+1] plays,
-    // so each chunk transition needs only the 2-byte play_song command.
+    // Double-buffer: two slots alternate between "playing" and "pre-loaded".
     let mut playing_slot = SongNumber::new(0)?;
     let mut preloaded_slot = SongNumber::new(1)?;
 
@@ -71,50 +99,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if n > 1 {
         create.define_song(preloaded_slot, &chunks[1])?;
     }
+
+    // Start the clock the moment we issue play_song so the sleep target
+    // below is measured from the right reference point.
     create.play_song(playing_slot)?;
+    let mut play_start = Instant::now();
 
     for i in 0..n {
-        // Exact duration: each robot unit = 1/64 s = 15 625 µs.
-        let chunk_duration = Duration::from_micros(
-            chunks[i]
-                .iter()
-                .map(|note| u64::from(note.duration_64ths()) * 15_625)
-                .sum::<u64>(),
-        );
-
+        let dur = chunk_duration(&chunks[i]);
         println!(
-            "Chunk {}/{}: {} notes, {:.2}s",
+            "Chunk {}/{}: {} notes, {:.3}s",
             i + 1,
             n,
             chunks[i].len(),
-            chunk_duration.as_secs_f64()
+            dur.as_secs_f64()
         );
 
-        // Poll SONG_PLAYING (packet 37) until the robot signals it has finished.
-        // `saw_playing` guards against a false early exit if we poll before the
-        // robot's firmware has transitioned to the playing state.
-        let started = Instant::now();
-        let mut saw_playing = false;
-        loop {
-            let sensor = create.query_sensor(37)?;
-            match sensor.song_playing {
-                Some(true) => saw_playing = true,
-                Some(false) if saw_playing || started.elapsed() >= chunk_duration => break,
-                _ => {}
-            }
-            if started.elapsed() >= chunk_duration + SONG_TIMEOUT_EXTRA {
-                eprintln!("Warning: timed out on chunk {}/{}", i + 1, n);
-                break;
-            }
-            sleep(SONG_POLL_INTERVAL);
+        // Sleep until (dur + SONG_TIMING_BUFFER) has elapsed since the last
+        // play_song.  Subtract time already spent printing / computing above.
+        let target = dur + SONG_TIMING_BUFFER;
+        let elapsed = play_start.elapsed();
+        if target > elapsed {
+            sleep(target - elapsed);
         }
 
         if i + 1 < n {
-            // Switch to the pre-loaded next chunk with a minimal 2-byte write.
+            // Transition: switch to the pre-loaded slot immediately.
             mem::swap(&mut playing_slot, &mut preloaded_slot);
             create.play_song(playing_slot)?;
+            play_start = Instant::now();
 
-            // Pre-load chunk[i+2] into the now-free slot during this chunk's playback.
+            // Pre-load the next-next chunk into the now-free slot.
+            // This write happens during the new chunk's playback — no gap.
             if i + 2 < n {
                 create.define_song(preloaded_slot, &chunks[i + 2])?;
             }
