@@ -15,7 +15,7 @@ pub use create_oi;
 /// Synchronous serial port transport.
 #[derive(Debug)]
 pub struct SerialTransport {
-    port: Option<Box<dyn serialport::SerialPort>>,
+    port: Box<dyn serialport::SerialPort>,
 }
 
 impl SerialTransport {
@@ -28,7 +28,7 @@ impl SerialTransport {
             .flow_control(serialport::FlowControl::None)
             .timeout(Duration::from_secs(1))
             .open()?;
-        Ok(Self { port: Some(port) })
+        Ok(Self { port })
     }
 
     /// Open a serial port with a custom baud rate.
@@ -40,50 +40,35 @@ impl SerialTransport {
             .flow_control(serialport::FlowControl::None)
             .timeout(Duration::from_secs(1))
             .open()?;
-        Ok(Self { port: Some(port) })
+        Ok(Self { port })
     }
 
-    fn port_mut(&mut self) -> io::Result<&mut Box<dyn serialport::SerialPort>> {
-        self.port
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "serial port is closed"))
+    /// Flush pending output and explicitly close the port.
+    ///
+    /// This is an inherent consuming method for callers that want explicit,
+    /// fallible shutdown. Dropping the transport also closes the port via
+    /// `Drop`, but without the opportunity to observe a flush error.
+    pub fn close(mut self) -> io::Result<()> {
+        io::Write::flush(&mut self.port)
     }
 }
 
 impl Transport for SerialTransport {
     fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
-        io::Write::write_all(self.port_mut()?, data)
+        io::Write::write_all(&mut self.port, data)
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        io::Read::read(self.port_mut()?, buf)
+        io::Read::read(&mut self.port, buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        match self.port.as_mut() {
-            Some(p) => io::Write::flush(p),
-            None => Ok(()),
-        }
+        io::Write::flush(&mut self.port)
     }
 
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        self.port_mut()?
+        self.port
             .set_timeout(timeout.unwrap_or(Duration::from_secs(u64::MAX)))
             .map_err(io::Error::other)
-    }
-
-    /// Close the transport.
-    ///
-    /// Flushes pending output and drops the port handle (closing the OS file
-    /// descriptor). After this call, `read` and `write_all` return
-    /// [`io::ErrorKind::NotConnected`]. Calling `close` again is a no-op.
-    ///
-    /// Note: if the flush fails, the port is still closed and the error is
-    /// returned, but subsequent calls will see `NotConnected` regardless.
-    fn close(&mut self) -> io::Result<()> {
-        if let Some(mut p) = self.port.take() {
-            io::Write::flush(&mut p)?;
-        }
-        Ok(())
     }
 }

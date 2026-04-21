@@ -98,11 +98,6 @@ impl Transport for MockTransport {
     fn set_read_timeout(&mut self, _timeout: Option<Duration>) -> io::Result<()> {
         Ok(())
     }
-
-    fn close(&mut self) -> io::Result<()> {
-        self.closed = true;
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------

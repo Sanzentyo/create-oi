@@ -53,6 +53,12 @@ pub trait AsyncTransport: fmt::Debug {
 ///
 /// This trait is only available with the `std` feature. For embedded
 /// targets, use [`AsyncTransport`] instead.
+///
+/// # Closing
+///
+/// This trait does **not** include a `close` method. Transports are closed
+/// when dropped. Concrete types may provide their own consuming `close(self)`
+/// method for explicit, fallible shutdown with flush.
 #[cfg(feature = "std")]
 pub trait Transport: fmt::Debug + Send {
     /// Write all bytes to the transport.
@@ -67,7 +73,4 @@ pub trait Transport: fmt::Debug + Send {
 
     /// Set the read timeout. `None` means blocking forever.
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> std::io::Result<()>;
-
-    /// Close the transport. After this, reads/writes should return errors.
-    fn close(&mut self) -> std::io::Result<()>;
 }
