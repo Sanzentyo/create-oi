@@ -278,3 +278,43 @@ in Off mode.
 
 ### Result
 212 tests pass (41 unit + 57 sync + 58 async + 56 protocol). CI green.
+
+---
+
+## Round 11 — start_stream validation + scheduling LEDs API (commit TBD)
+
+**Trigger:** rubber-duck OI audit round 3 (HIGH/MEDIUM findings)
+
+### Changes
+
+- **`start_stream()` unknown-ID validation** (sync + async): previously used
+  `packet_info(id).map_or(0, ...)` so unknown/group IDs contributed 0 payload bytes
+  and still passed validation — the invalid ID was sent to the robot and the
+  `StreamParser` would later choke on it. Fixed with `try_fold` that returns
+  `Error::Protocol(UnknownPacketId)` on the first unrecognised packet ID, before any
+  bytes are written to the transport.
+- **Fixed existing test**: `async_start_stream_too_many_ids_rejects_before_send` was
+  using `(7..60)` (included invalid ID 59); updated to `[8u8; 53]` (53 valid IDs).
+- **`set_scheduling_leds()` API added** (opcode 162, sync + async): Create 2–only
+  (returns `ValidationError` on Create 1 / Roomba 400); available in Safe and Full
+  modes (`Actuatable` impl block); parameters `day_leds: u8` (bits 0–6 = Sun–Sat) and
+  `schedule_leds: u8` (bits 0–3 = colon/AM-PM/clock/schedule icons).
+
+### Tests added (14 new)
+
+- `start_stream_rejects_unknown_packet_id_before_send` (sync + async = 2)
+- `start_stream_rejects_group_packet_id_before_send` (sync + async = 2)
+- `start_stream_accepts_valid_packet_ids` (sync + async = 2)
+- `set_scheduling_leds_sends_correct_bytes` (sync + async = 2)
+- `set_scheduling_leds_rejects_create1` (sync + async = 2)
+- `set_scheduling_leds_rejects_roomba400` (sync + async = 2)
+
+### Not fixed this round (deferred)
+
+- **`baud()` command** (opcode 129): The protocol encoder (`encode_baud`) exists but
+  exposing a public `baud()` API requires transport-level baud-rate reconfiguration
+  which the current `Transport`/`AsyncTransport` traits do not support. Deferred to
+  a future transport-trait extension.
+
+### Result
+228 tests pass (41 unit + 64 sync + 63 async + 56 protocol + 1 doc). CI green.

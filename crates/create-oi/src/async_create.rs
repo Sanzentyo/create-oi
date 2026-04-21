@@ -425,12 +425,16 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
-        let payload_bytes: usize = packet_ids
-            .iter()
-            .map(|&id| {
-                1 + create_oi_protocol::opcode::packet_info(id).map_or(0, |p| p.len as usize)
-            })
-            .sum();
+        let payload_bytes =
+            packet_ids
+                .iter()
+                .try_fold(0usize, |acc, &id| -> Result<usize, Error<T::Error>> {
+                    let info =
+                        create_oi_protocol::opcode::packet_info(id).ok_or(Error::Protocol(
+                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                        ))?;
+                    Ok(acc + 1 + info.len as usize)
+                })?;
         if payload_bytes > 255 {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
@@ -759,6 +763,29 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
             }));
         }
         self.send_cmd(&command::encode_digit_leds_raw(d3, d2, d1, d0))
+            .await
+    }
+
+    /// Set the scheduling LED indicators (opcode 162).
+    ///
+    /// - `day_leds`: bitmask for day-of-week LEDs; bits 0–6 = Sun–Sat.
+    /// - `schedule_leds`: bitmask for status icons; bit 0=colon, bit 1=AM/PM,
+    ///   bit 2=clock icon, bit 3=schedule icon.
+    ///
+    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 162 is
+    /// not supported on Create 1 or Roomba 400).
+    pub async fn set_scheduling_leds(
+        &mut self,
+        day_leds: u8,
+        schedule_leds: u8,
+    ) -> Result<(), Error<T::Error>> {
+        if !self.model.is_create2() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "set_scheduling_leds (OPCODE 162) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
+        self.send_cmd(&command::encode_scheduling_leds(day_leds, schedule_leds))
             .await
     }
 

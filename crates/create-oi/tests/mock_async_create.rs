@@ -408,7 +408,7 @@ async fn async_start_stream_too_many_ids_rejects_before_send() {
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    let ids: Vec<u8> = (7..60).collect(); // 53 IDs
+    let ids = vec![8u8; 53]; // 53 copies of valid packet 8 — exceeds async limit of 52
     let err = create.start_stream(&ids).await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
@@ -1028,5 +1028,126 @@ async fn async_seek_dock_available_in_passive_mode() {
     assert!(
         written.contains(&143),
         "expected DOCK opcode 143 in payload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 11: start_stream unknown packet validation, set_scheduling_leds
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn start_stream_rejects_unknown_packet_id_before_send() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.start_stream(&[8, 99, 22]).await; // 99 is not a valid packet ID
+    assert!(result.is_err(), "should reject unknown packet ID 99");
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes should be sent when an unknown ID is present"
+    );
+}
+
+#[tokio::test]
+async fn start_stream_rejects_group_packet_id_before_send() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.start_stream(&[0]).await; // group packet 0 is not supported
+    assert!(result.is_err(), "should reject group packet ID 0");
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes should be sent when a group ID is present"
+    );
+}
+
+#[tokio::test]
+async fn start_stream_accepts_valid_packet_ids() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let result = robot.start_stream(&[8, 22, 19]).await; // wall, voltage, distance — all valid
+    assert!(result.is_ok(), "should accept valid packet IDs");
+    assert!(
+        robot.transport().written_bytes().contains(&148),
+        "STREAM opcode 148 should be sent"
+    );
+}
+
+#[tokio::test]
+async fn set_scheduling_leds_sends_correct_bytes() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    robot.set_scheduling_leds(0b0101010, 0b0011).await.unwrap();
+    let written = robot.transport().written_bytes().to_vec();
+    // Expect: [162, 0b0101010, 0b0011]
+    assert!(
+        written.ends_with(&[162, 0b0101010, 0b0011]),
+        "expected scheduling LEDs command bytes; got {written:?}"
+    );
+}
+
+#[tokio::test]
+async fn set_scheduling_leds_rejects_create1() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Create1)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7f, 0x0f).await;
+    assert!(
+        result.is_err(),
+        "set_scheduling_leds should fail on Create 1"
+    );
+}
+
+#[tokio::test]
+async fn set_scheduling_leds_rejects_roomba400() {
+    let transport = MockAsyncTransport::new();
+    let mut robot = AsyncCreate::new(transport, RobotModel::Roomba400)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7f, 0x0f).await;
+    assert!(
+        result.is_err(),
+        "set_scheduling_leds should fail on Roomba 400"
     );
 }

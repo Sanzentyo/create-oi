@@ -1051,3 +1051,112 @@ fn seek_dock_available_in_passive_mode() {
         "expected DOCK opcode 143 in payload"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Round 11: start_stream unknown packet validation, set_scheduling_leds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn start_stream_rejects_unknown_packet_id_before_send() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.start_stream(&[8, 99, 22]); // 99 is not a valid packet ID
+    assert!(result.is_err(), "should reject unknown packet ID 99");
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes should be sent when an unknown ID is present"
+    );
+}
+
+#[test]
+fn start_stream_rejects_group_packet_id_before_send() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.start_stream(&[0]); // group packet 0 is not supported
+    assert!(result.is_err(), "should reject group packet ID 0");
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes should be sent when a group ID is present"
+    );
+}
+
+#[test]
+fn start_stream_accepts_valid_packet_ids() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.start_stream(&[8, 22, 19]); // wall, voltage, distance — all valid
+    assert!(result.is_ok(), "should accept valid packet IDs");
+    assert!(
+        robot.transport().written_bytes().contains(&148),
+        "STREAM opcode 148 should be sent"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_sends_correct_bytes() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    robot.set_scheduling_leds(0b0101010, 0b0011).unwrap();
+    let written = robot.transport().written_bytes();
+    // Expect: [162, 0b0101010, 0b0011]
+    assert!(
+        written.ends_with(&[162, 0b0101010, 0b0011]),
+        "expected scheduling LEDs command bytes; got {written:?}"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_rejects_create1() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create1)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7f, 0x0f);
+    assert!(
+        result.is_err(),
+        "set_scheduling_leds should fail on Create 1"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_rejects_roomba400() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7f, 0x0f);
+    assert!(
+        result.is_err(),
+        "set_scheduling_leds should fail on Roomba 400"
+    );
+}
