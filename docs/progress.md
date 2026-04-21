@@ -70,8 +70,8 @@
 ### Test Summary
 - 44 unit tests (protocol)
 - 25 unit tests (types + control)
-- 14 sync mock robot integration tests
-- 13 async mock robot integration tests
+- 21 sync mock robot integration tests
+- 19 async mock robot integration tests
 - 1 protocol doc test
 - `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅
 - `just check-nostd` passes: no_std + Embassy thumbv7em-none-eabihf ✅
