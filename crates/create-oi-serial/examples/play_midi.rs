@@ -113,6 +113,10 @@ struct Args {
     /// Keep the trailing silence after the last note (only with --include-rests)
     #[arg(long)]
     keep_end_silence: bool,
+
+    /// Sync power LED color and digit display to playback (pitch → color, note name display)
+    #[arg(short = 'L', long)]
+    led_sync: bool,
 }
 
 fn chunk_duration(chunk: &[SongNote]) -> Duration {
@@ -152,51 +156,153 @@ fn print_chunk_info(i: usize, n: usize, chunk: &[SongNote]) {
     );
 }
 
+/// One LED state update, timed relative to the start of a song chunk.
+struct LedFrame {
+    /// Offset from chunk start when this frame becomes active.
+    offset: Duration,
+    /// Power LED color: 0 = green (low pitch), 255 = red (high pitch).
+    color: u8,
+    /// Power LED intensity: 0 = off (rest), 200 = active note.
+    intensity: u8,
+    /// 4-byte printable ASCII payload for the digit display, e.g. `b"C  4"`.
+    display: [u8; 4],
+}
+
+/// Convert a MIDI pitch (31–127) into a 4-char ASCII label for the digit display.
+///
+/// Format: `[note, '#'|' ', ' ', octave]`, e.g. `b"C  4"` or `b"A# 4"`.
+fn pitch_to_display(pitch: u8) -> [u8; 4] {
+    const NAMES: [u8; 12] = [
+        b'C', b'C', b'D', b'D', b'E', b'F', b'F', b'G', b'G', b'A', b'A', b'B',
+    ];
+    const IS_SHARP: [bool; 12] = [
+        false, true, false, true, false, false, true, false, true, false, true, false,
+    ];
+    let semitone = (pitch % 12) as usize;
+    // MIDI 0 = C-1, 12 = C0, 24 = C1, ..., 60 = C4. Octave = pitch/12 - 1.
+    let oct_char = b'0' + (pitch / 12).saturating_sub(1).min(9);
+    [
+        NAMES[semitone],
+        if IS_SHARP[semitone] { b'#' } else { b' ' },
+        b' ',
+        oct_char,
+    ]
+}
+
+/// Build one [`LedFrame`] per note in `chunk` (notes light up, rests turn off).
+fn chunk_led_frames(chunk: &[SongNote]) -> Vec<LedFrame> {
+    let mut frames = Vec::with_capacity(chunk.len());
+    let mut offset = Duration::ZERO;
+    for note in chunk {
+        let dur = Duration::from_micros(u64::from(note.duration_64ths()) * 15_625);
+        let (color, intensity, display) = if note.is_rest() {
+            (0u8, 0u8, *b"    ")
+        } else {
+            let p = note.midi_note();
+            // Map pitch 31–127 → color 0 (green) – 255 (red).
+            let color = ((u32::from(p.saturating_sub(31)) * 255) / (127 - 31)) as u8;
+            (color, 200u8, pitch_to_display(p))
+        };
+        frames.push(LedFrame {
+            offset,
+            color,
+            intensity,
+            display,
+        });
+        offset += dur;
+    }
+    frames
+}
+
+/// Apply the most-recently-overdue LED frame, coalescing any missed frames.
+///
+/// `consumed` is advanced past every frame whose offset ≤ `elapsed`; only the
+/// last such frame is actually sent to the robot (late-wake coalescing).
+fn drive_leds(
+    create: &mut Create<Safe, SerialTransport>,
+    frames: &[LedFrame],
+    consumed: &mut usize,
+    elapsed: Duration,
+) {
+    let ready = frames.partition_point(|f| f.offset <= elapsed);
+    if ready > *consumed {
+        *consumed = ready;
+        let f = &frames[ready - 1];
+        let _ = create.set_leds(
+            false,
+            false,
+            false,
+            false,
+            PowerLedColor::new(f.color),
+            LedIntensity::new(f.intensity),
+        );
+        let _ = create.set_digit_leds(f.display[0], f.display[1], f.display[2], f.display[3]);
+    }
+}
+
 /// Wait until the robot finishes playing the current chunk, then return.
 ///
-/// Sleeps until near the expected end of the chunk, then polls `SONG_PLAYING`
-/// (packet 37) at [`SONG_POLL_INTERVAL`] intervals.  Returns when the robot
-/// reports playback stopped, or when the fallback timeout fires.
+/// Uses a unified event loop that sleeps to the earlier of the next LED frame
+/// or the next sensor poll.  Sensor polling begins [`SONG_POLL_EARLY`] before
+/// the expected chunk end to reduce serial traffic.  Any missed LED frames are
+/// coalesced — only the most-recent overdue frame is sent.
 fn wait_for_chunk_end(
     create: &mut Create<Safe, SerialTransport>,
     play_start: Instant,
     dur: Duration,
     chunk_idx: usize,
+    led_frames: &[LedFrame],
 ) {
-    // Sleep until SONG_POLL_EARLY before expected end to reduce serial traffic.
-    let approach_at = play_start + dur.saturating_sub(SONG_POLL_EARLY);
-    let now = Instant::now();
-    if now < approach_at {
-        sleep(approach_at - now);
-    }
-
-    // Poll SONG_PLAYING until the robot reports the song has stopped.
     let timeout_at = play_start + dur + SONG_POLL_TIMEOUT;
+    let poll_start = play_start + dur.saturating_sub(SONG_POLL_EARLY);
+    let mut consumed = 0usize;
     let mut saw_playing = false;
+
     loop {
-        match create.query_sensor(37) {
-            Ok(sd) => {
-                let playing = sd.song_playing.unwrap_or(false);
-                saw_playing |= playing;
-                // Break on true→false transition, or when elapsed time covers
-                // very short chunks that may finish before the first poll.
-                if !playing && (saw_playing || play_start.elapsed() >= dur) {
-                    return;
-                }
-            }
-            Err(e) => eprintln!(
-                "Warning: sensor query failed during chunk {}: {e}",
-                chunk_idx + 1
-            ),
-        }
-        if Instant::now() >= timeout_at {
+        let now = Instant::now();
+        if now >= timeout_at {
             eprintln!(
                 "Warning: chunk {} timed out waiting for song end; advancing",
                 chunk_idx + 1
             );
             return;
         }
-        sleep(SONG_POLL_INTERVAL);
+
+        drive_leds(
+            create,
+            led_frames,
+            &mut consumed,
+            now.saturating_duration_since(play_start),
+        );
+
+        if now >= poll_start {
+            match create.query_sensor(37) {
+                Ok(sd) => {
+                    let playing = sd.song_playing.unwrap_or(false);
+                    saw_playing |= playing;
+                    if !playing && (saw_playing || now.duration_since(play_start) >= dur) {
+                        return;
+                    }
+                }
+                Err(e) => eprintln!(
+                    "Warning: sensor query failed during chunk {}: {e}",
+                    chunk_idx + 1
+                ),
+            }
+        }
+
+        // Sleep until the earlier of: next LED frame or next sensor poll.
+        let next_led = led_frames.get(consumed).map(|f| play_start + f.offset);
+        let next_poll = if now < poll_start {
+            poll_start
+        } else {
+            now + SONG_POLL_INTERVAL
+        };
+        let wake_at = next_led.map_or(next_poll, |t| t.min(next_poll));
+        let sleep_for = wake_at.saturating_duration_since(Instant::now());
+        if sleep_for > Duration::ZERO {
+            sleep(sleep_for);
+        }
     }
 }
 
@@ -267,7 +373,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         let dur = chunk_duration(&chunks[playing_i]);
-        wait_for_chunk_end(&mut create, play_start, dur, playing_i);
+        let led_frames = if args.led_sync {
+            chunk_led_frames(&chunks[playing_i])
+        } else {
+            vec![]
+        };
+        wait_for_chunk_end(&mut create, play_start, dur, playing_i, &led_frames);
 
         let next_i = playing_i + 1;
         if next_i >= n {
@@ -289,6 +400,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         playing_i = next_i;
     }
 
+    if args.led_sync {
+        let _ = create.set_leds(
+            false,
+            false,
+            false,
+            false,
+            PowerLedColor::GREEN,
+            LedIntensity::OFF,
+        );
+        let _ = create.set_digit_leds(b' ', b' ', b' ', b' ');
+    }
     let _create = create.to_passive().map_err(|e| e.source)?;
     println!("Done!");
     Ok(())

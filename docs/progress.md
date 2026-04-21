@@ -1182,3 +1182,61 @@ Uses `Option<NonZeroUsize>` as the clap arg type (parsed via `FromStr`).
 - `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
 - `cargo fmt --all`: applied
 - `just check-nostd`: all 4 no_std / embedded builds pass
+
+## Round 30 — LED synthesis for `play_midi` examples
+
+### Goals
+
+Add `--led-sync / -L` flag to all three `play_midi` examples so the robot's
+power LED and 4-digit display light up in sync with MIDI playback.
+
+### Design
+
+**`LedFrame` struct** (one per `SongNote` in a chunk):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `offset` | `Duration` | Time relative to chunk start |
+| `color` | `u8` | `PowerLedColor`: 0 = green (low pitch), 255 = red (high pitch) |
+| `intensity` | `u8` | 200 = active note, 0 = rest (LED off) |
+| `display` | `[u8; 4]` | ASCII digit payload, e.g. `b"C  4"` or `b"A# 4"` |
+
+**`pitch_to_display(pitch)`**: maps MIDI pitch to `[note, '#'|' ', ' ', octave]`.
+
+**`chunk_led_frames(chunk)`**: builds one `LedFrame` per `SongNote`; rests get intensity=0 and four spaces.
+
+**Missed-frame coalescing**: `partition_point(|f| f.offset <= elapsed)` finds the count of overdue frames; only the last one is sent to the robot (avoids flooding serial with redundant commands on late wakeup).
+
+### Wait loop redesign
+
+The original two-phase loop (initial sleep → poll) is replaced by a **unified event loop**:
+
+```
+loop {
+    drive_leds (coalescing)
+    if near end: poll SONG_PLAYING
+    sleep until min(next_led_frame, next_sensor_poll)
+}
+```
+
+This means LEDs update through the entire chunk, not just the polling window.
+The first `drive_leds` call fires offset=0 on the very first loop iteration (≈ immediately after `play_song`).
+
+### Cleanup
+
+After all chunks finish, `--led-sync` clears both outputs before `to_passive()`:
+- `set_leds(GREEN, OFF)` — turns off power LED
+- `set_digit_leds(b' ', b' ', b' ', b' ')` — clears digit display
+
+### Files changed
+
+- `crates/create-oi-serial/examples/play_midi.rs`: `drive_leds` helper + unified `wait_for_chunk_end`
+- `crates/create-oi-tokio/examples/play_midi.rs`: inline unified wait loop
+- `crates/create-oi-smol/examples/play_midi.rs`: inline unified wait loop (smol::Timer)
+
+### Test results
+
+- `cargo test --workspace --features midi`: **363 tests passed** (unchanged)
+- `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
+- `cargo fmt --all`: applied
+- `just check-nostd`: all 4 no_std / embedded builds pass
