@@ -369,13 +369,11 @@ impl fmt::Display for IrChar {
 
 /// Wheel velocity in mm/s, as used in the OI wire protocol.
 ///
-/// This is a raw protocol integer. It is the caller's responsibility to ensure
-/// the value lies within the OI spec limits (±500 mm/s for `Drive`/`DriveDirect`).
-/// The high-level `create-oi` crate performs that validation before constructing
-/// this type.
+/// This is a raw protocol integer with OI spec validation available via
+/// [`TryFrom<i16>`]: valid range is −500 to +500 mm/s.
 ///
-/// Use [`from_raw`](Self::from_raw) to construct; do not rely on raw integer
-/// conversions, which would defeat the type-safety purpose.
+/// Use [`from_raw`](Self::from_raw) for unchecked construction or
+/// [`try_from`](TryFrom::try_from) for validated construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VelocityMmPerSec(i16);
 
@@ -396,6 +394,23 @@ impl VelocityMmPerSec {
     }
 }
 
+impl TryFrom<i16> for VelocityMmPerSec {
+    /// The out-of-range input value.
+    type Error = i16;
+
+    /// Construct a `VelocityMmPerSec` with OI spec range validation (−500 to +500 mm/s).
+    ///
+    /// Returns `Err(v)` if `v` is outside `−500..=500`.
+    #[inline(always)]
+    fn try_from(v: i16) -> Result<Self, Self::Error> {
+        if (-500..=500).contains(&v) {
+            Ok(Self::from_raw(v))
+        } else {
+            Err(v)
+        }
+    }
+}
+
 impl fmt::Display for VelocityMmPerSec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} mm/s", self.0)
@@ -407,7 +422,9 @@ impl fmt::Display for VelocityMmPerSec {
 /// Encodes both physical arc radii and the three OI special values:
 /// [`STRAIGHT`](Self::STRAIGHT), [`TURN_CW`](Self::TURN_CW), [`TURN_CCW`](Self::TURN_CCW).
 ///
-/// Use [`from_raw`](Self::from_raw) for construction; do not pass raw integers.
+/// Use [`TryFrom<i16>`] for validated construction (accepts ±2000 mm and the
+/// three OI special sentinels; rejects 0 and out-of-range values), or
+/// [`from_raw`](Self::from_raw) for unchecked construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RadiusMm(i16);
 
@@ -432,6 +449,29 @@ impl RadiusMm {
     }
 }
 
+impl TryFrom<i16> for RadiusMm {
+    /// The out-of-range input value.
+    type Error = i16;
+
+    /// Construct a `RadiusMm` with OI spec validation.
+    ///
+    /// Valid values:
+    /// - `i16::MIN` (−32768): drive straight (OI sentinel `0x8000`)
+    /// - `−2000..=−1` and `1..=2000`: arc radius in mm
+    ///
+    /// `0` and values outside `[−2000, 2000] ∪ {i16::MIN}` are rejected.
+    ///
+    /// Returns `Err(v)` for any invalid value.
+    #[inline(always)]
+    fn try_from(v: i16) -> Result<Self, Self::Error> {
+        if v == i16::MIN || (v >= -2000 && v != 0 && v <= 2000) {
+            Ok(Self::from_raw(v))
+        } else {
+            Err(v)
+        }
+    }
+}
+
 impl fmt::Display for RadiusMm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -445,11 +485,8 @@ impl fmt::Display for RadiusMm {
 
 /// Wheel PWM value as used in the OI `DrivePwm` command wire protocol.
 ///
-/// Valid OI range is ±255. The high-level `create-oi` crate enforces this
-/// before construction; this type itself performs no validation.
-///
-/// Use [`from_raw`](Self::from_raw) to construct; do not rely on raw integer
-/// conversions.
+/// Valid OI range is ±255. Use [`TryFrom<i16>`] for validated construction,
+/// or [`from_raw`](Self::from_raw) for unchecked construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WheelPwm(i16);
 
@@ -467,6 +504,23 @@ impl WheelPwm {
     #[inline(always)]
     pub const fn get(self) -> i16 {
         self.0
+    }
+}
+
+impl TryFrom<i16> for WheelPwm {
+    /// The out-of-range input value.
+    type Error = i16;
+
+    /// Construct a `WheelPwm` with OI spec range validation (−255 to +255).
+    ///
+    /// Returns `Err(v)` if `v` is outside `−255..=255`.
+    #[inline(always)]
+    fn try_from(v: i16) -> Result<Self, Self::Error> {
+        if (-255..=255).contains(&v) {
+            Ok(Self::from_raw(v))
+        } else {
+            Err(v)
+        }
     }
 }
 
@@ -537,5 +591,42 @@ mod tests {
         assert_eq!(p.get(), -128);
         assert_eq!(WheelPwm::STOP.get(), 0);
         assert_eq!(p.to_string(), "PWM -128");
+    }
+
+    #[test]
+    fn velocity_mm_per_sec_try_from() {
+        assert!(VelocityMmPerSec::try_from(500_i16).is_ok());
+        assert!(VelocityMmPerSec::try_from(-500_i16).is_ok());
+        assert!(VelocityMmPerSec::try_from(0_i16).is_ok());
+        assert_eq!(VelocityMmPerSec::try_from(501_i16), Err(501));
+        assert_eq!(VelocityMmPerSec::try_from(-501_i16), Err(-501));
+        assert_eq!(VelocityMmPerSec::try_from(i16::MAX), Err(i16::MAX));
+    }
+
+    #[test]
+    fn radius_mm_try_from() {
+        // Special sentinels are valid
+        assert!(RadiusMm::try_from(i16::MIN).is_ok());
+        assert!(RadiusMm::try_from(-1_i16).is_ok());
+        assert!(RadiusMm::try_from(1_i16).is_ok());
+        // Arc radii in range
+        assert!(RadiusMm::try_from(500_i16).is_ok());
+        assert!(RadiusMm::try_from(-2000_i16).is_ok());
+        assert!(RadiusMm::try_from(2000_i16).is_ok());
+        // Invalid values
+        assert_eq!(RadiusMm::try_from(0_i16), Err(0));
+        assert_eq!(RadiusMm::try_from(2001_i16), Err(2001));
+        assert_eq!(RadiusMm::try_from(-2001_i16), Err(-2001));
+        // i16::MAX is neither a sentinel nor in range
+        assert!(RadiusMm::try_from(i16::MAX).is_err());
+    }
+
+    #[test]
+    fn wheel_pwm_try_from() {
+        assert!(WheelPwm::try_from(255_i16).is_ok());
+        assert!(WheelPwm::try_from(-255_i16).is_ok());
+        assert!(WheelPwm::try_from(0_i16).is_ok());
+        assert_eq!(WheelPwm::try_from(256_i16), Err(256));
+        assert_eq!(WheelPwm::try_from(-256_i16), Err(-256));
     }
 }

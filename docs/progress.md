@@ -604,3 +604,56 @@ test: build
 301 tests pass (`--workspace`); 62 pass with `--features midi`. no_std builds unaffected.
 Embassy crate unchanged (uses `default-features = false`).
 
+
+---
+
+## Round 18: Typed Drive Wrappers + TryFrom Validation
+
+**Design reviewed by rubber-duck agent before implementation. Key findings addressed:**
+- Rename `VelocityMmS` → `VelocityMmPerSec` (clearer)
+- Drop `From<i16>` (would defeat type safety); keep `from_raw()` for unchecked construction
+- Implement `From<Velocity>` etc. in `create-oi` (infallible since source types already validated)
+- Include all missed call sites (`stop()`, `drive_twist()`)
+
+### New protocol types in `create-oi-protocol/src/types.rs`
+
+| Type | Constant(s) | `TryFrom<i16>` valid range |
+|------|-------------|---------------------------|
+| `VelocityMmPerSec(i16)` | `ZERO` | `−500..=500` |
+| `RadiusMm(i16)` | `STRAIGHT`, `TURN_CW`, `TURN_CCW` | `i16::MIN` ∪ `−2000..=−1` ∪ `1..=2000` (0 rejected) |
+| `WheelPwm(i16)` | `STOP` | `−255..=255` |
+
+All three implement `TryFrom<i16>` with OI spec range validation; `Err(v)` returns the rejected raw value (matching the `DayOfWeek::try_from` pattern).
+
+### Updated encode functions
+
+`encode_drive`, `encode_drive_direct`, `encode_drive_pwm` in `command.rs` now accept
+`VelocityMmPerSec`/`RadiusMm`/`WheelPwm` instead of raw `i16`.
+
+### Conversions in `create-oi/src/types.rs`
+
+Infallible conversions added (high-level → protocol types):
+- `From<Velocity> for VelocityMmPerSec`
+- `From<Radius> for RadiusMm`
+- `From<MotorPower> for WheelPwm`
+
+### Call site updates
+
+All 5 drive call sites in `create.rs` and 5 in `async_create.rs` updated to use `.into()`,
+`VelocityMmPerSec::ZERO`, `RadiusMm::STRAIGHT`, or `VelocityMmPerSec::from_raw()`.
+
+### CC0 demo MIDI asset
+
+`assets/midi/game-over.mid` added — 22-note CC0 file from
+[m-malandro/CC0-midis](https://github.com/m-malandro/CC0-midis); ideal for example code
+(familiar concept, 2 song chunks, only 969 bytes).
+
+### Tests added (12 new in `create-oi-protocol/src/types.rs`)
+
+- `velocity_mm_per_sec_try_from` — boundary tests ±500, ±501, i16::MAX
+- `radius_mm_try_from` — sentinel, boundary, zero rejection, out-of-range
+- `wheel_pwm_try_from` — boundary ±255, ±256
+
+### Prelude
+
+`VelocityMmPerSec`, `RadiusMm`, `WheelPwm` re-exported from `create_oi::prelude`.
