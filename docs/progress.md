@@ -979,3 +979,51 @@ Rewritten from positional `env::args()` to `clap` `#[derive(Parser)]`:
 - `test_merge_include_rests_basic` — merge mode rest generation
 
 Total tests: 316+ (40 MIDI unit tests, up from 31)
+
+## Round 26 — Breaking: include_rests default=true; play_midi example rename
+
+### Goal
+
+Make rest/silence output the default (opt-out rather than opt-in), and
+simplify example names since they live in separate crates.
+
+### Changes
+
+#### `MidiConfig.include_rests` default changed to `true` (BREAKING)
+
+Previously silence gaps were silently dropped. Now pitch-0 rest `SongNote`
+values are emitted by default.  To restore the old behaviour:
+
+```rust
+MidiConfig { include_rests: false, ..MidiConfig::default() }
+```
+
+#### CLI flag change (BREAKING)
+
+| Before | After |
+|--------|-------|
+| `-r` / `--include-rests` (opt-in) | `--no-rests` (opt-out) |
+
+The short `-r` flag is removed; `--no-rests` suppresses rest generation.
+
+#### Example rename
+
+| Crate | Old name | New name |
+|-------|----------|----------|
+| create-oi-serial | `play_midi_sync` | `play_midi` |
+| create-oi-tokio | `play_midi_tokio` | `play_midi` |
+| create-oi-smol | `play_midi_smol` | `play_midi` |
+
+Since each is in a separate crate there is no naming conflict. Usage:
+
+```
+cargo run -p create-oi-serial --example play_midi --features midi -- /dev/cu.usbserial-*
+cargo run -p create-oi-tokio --example play_midi --features midi -- /dev/cu.usbserial-*
+cargo run -p create-oi-smol  --example play_midi --features midi -- /dev/cu.usbserial-*
+```
+
+#### Test rename
+
+`test_include_rests_false_unchanged` → `test_include_rests_disabled` (uses
+explicit `include_rests: false`).  `test_include_rests_basic` now exercises
+the default config directly.
