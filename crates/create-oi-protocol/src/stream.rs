@@ -23,7 +23,10 @@ use crate::sensor::SensorData;
 const STREAM_HEADER: u8 = 19;
 
 /// Default buffer capacity — sufficient for any valid OI stream frame.
-const DEFAULT_BUF_CAP: usize = 256;
+///
+/// An OI frame is: header(1) + N byte(1) + payload(N, max 255) + checksum(1) = N + 3 bytes.
+/// With N_max = 255: 255 + 3 = 258 bytes total.
+const DEFAULT_BUF_CAP: usize = 258;
 
 /// State machine for parsing OI stream frames from a byte stream.
 ///
@@ -31,7 +34,8 @@ const DEFAULT_BUF_CAP: usize = 256;
 /// Feed it bytes, and it produces parsed [`SensorData`] frames.
 ///
 /// The const generic `N` controls the internal buffer capacity.
-/// Default is 256, which is sufficient for any valid OI stream frame.
+/// Default is 258, which is the exact maximum for any valid OI stream frame
+/// (header + length byte + 255-byte payload + checksum).
 #[derive(Debug)]
 pub struct StreamParser<const N: usize = DEFAULT_BUF_CAP> {
     /// Internal fixed-size byte buffer.

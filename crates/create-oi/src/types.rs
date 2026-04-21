@@ -32,8 +32,11 @@ const OI_RADIUS_TURN_CCW_RAW: i16 = 1;
 /// Maximum PWM magnitude for motor power: 255 (OI spec §5.8).
 const OI_MAX_PWM: i16 = 255;
 
-/// Maximum song slot index (0–3, OI spec §5.13).
-const OI_MAX_SONG_NUMBER: u8 = 3;
+/// Maximum song slot index for Create 2 (0–4, OI spec §5.13).
+///
+/// Create 2 supports 5 song slots (0–4). Create 1 / Roomba 400–500 supports
+/// 16 slots (0–15), but this library targets Create 2 as the primary model.
+const OI_MAX_SONG_NUMBER: u8 = 4;
 
 /// Conversion factor: meters → millimeters.
 const M_TO_MM: f32 = 1000.0;
@@ -700,11 +703,12 @@ mod tests {
     fn song_number_valid() {
         assert!(SongNumber::new(0).is_ok());
         assert!(SongNumber::new(3).is_ok());
+        assert!(SongNumber::new(4).is_ok());
     }
 
     #[test]
     fn song_number_invalid() {
-        assert!(SongNumber::new(4).is_err());
+        assert!(SongNumber::new(5).is_err());
     }
 
     #[test]

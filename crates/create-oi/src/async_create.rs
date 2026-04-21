@@ -549,25 +549,29 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
 
     /// Set motor PWM (main brush, side brush, vacuum).
     ///
-    /// OI motor PWM range is -127..=127. Passing -128 (i8::MIN) is invalid
-    /// and returns a `ValidationError` without sending any bytes.
+    /// - `main_brush` and `side_brush`: range -127..=127 (i8::MIN = -128 is rejected).
+    ///   Positive = forward direction, negative = reverse.
+    /// - `vacuum`: range 0..=127. Negative values are invalid per the OI spec
+    ///   (vacuum runs in one direction only) and are rejected without sending.
     pub async fn set_motors_pwm(
         &mut self,
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
     ) -> Result<(), Error<T::Error>> {
-        for (name, val) in [
-            ("main_brush", main_brush),
-            ("side_brush", side_brush),
-            ("vacuum", vacuum),
-        ] {
+        for (name, val) in [("main_brush", main_brush), ("side_brush", side_brush)] {
             if val == i8::MIN {
                 return Err(Error::Validation(ValidationError {
                     field: name,
                     reason: "motor PWM value -128 is not valid; range is -127..=127",
                 }));
             }
+        }
+        if vacuum < 0 {
+            return Err(Error::Validation(ValidationError {
+                field: "vacuum",
+                reason: "vacuum PWM must be 0..=127; negative values are invalid per OI spec",
+            }));
         }
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
             .await

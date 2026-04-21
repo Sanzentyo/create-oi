@@ -481,16 +481,17 @@ async fn async_poll_stream_eof_returns_protocol_error() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// set_motors_pwm i8::MIN guard
+// set_motors_pwm validation guards
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn async_set_motors_pwm_min_i8_rejects_before_send() {
+async fn async_set_motors_pwm_invalid_values_reject_before_send() {
     let mock = MockAsyncTransport::new();
     let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
     let bytes_before = robot.transport().written_bytes().len();
 
+    // i8::MIN (-128) is invalid for main_brush and side_brush
     let err = robot.set_motors_pwm(i8::MIN, 0, 0).await.unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
@@ -499,9 +500,19 @@ async fn async_set_motors_pwm_min_i8_rejects_before_send() {
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
 
+    // Negative vacuum is invalid per OI spec (vacuum is 0..=127 only)
+    let err = robot.set_motors_pwm(0, 0, -1).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
     let err = robot.set_motors_pwm(0, 0, i8::MIN).await.unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
+    // Valid boundary values should succeed
+    robot.set_motors_pwm(0, 0, 0).await.unwrap();
+    robot.set_motors_pwm(0, 0, 127).await.unwrap();
+    robot.set_motors_pwm(-127, -127, 0).await.unwrap();
 }
 
 // ---------------------------------------------------------------------------

@@ -83,8 +83,20 @@ pub struct SensorData {
     // --- Group 2: IR, buttons, motion (IDs 17–20) ---
     pub ir_omni: Option<IrChar>,
     pub buttons: Option<u8>,
-    pub distance: Option<i16>,
-    pub angle: Option<i16>,
+    /// Estimated distance traveled since this field was last read, in mm.
+    ///
+    /// **This is a delta accumulator**, not an absolute position. The robot
+    /// resets the internal counter each time this packet is read (or streamed).
+    /// Positive = forward, negative = backward. Accumulates as a signed 16-bit
+    /// integer and may saturate at ±32767 mm between reads.
+    pub distance_delta_mm: Option<i16>,
+    /// Estimated heading change since this field was last read, in degrees.
+    ///
+    /// **This is a delta accumulator**, not an absolute heading. The robot
+    /// resets the internal counter each time this packet is read (or streamed).
+    /// Positive = counter-clockwise, negative = clockwise. Accumulates as a
+    /// signed 16-bit integer and may saturate at ±32767° between reads.
+    pub angle_delta_deg: Option<i16>,
 
     // --- Group 3: battery (IDs 21–26) ---
     pub charging_state: Option<ChargingState>,
@@ -115,7 +127,13 @@ pub struct SensorData {
     pub requested_left_velocity: Option<i16>,
 
     // --- Encoders & light bumper (IDs 43–51) ---
+    /// Left wheel encoder count (packet 43). Wraps modulo 65536 (u16 rollover).
+    ///
+    /// To compute a signed delta across rollover: `wrapping_sub` the previous reading.
     pub left_encoder_counts: Option<u16>,
+    /// Right wheel encoder count (packet 44). Wraps modulo 65536 (u16 rollover).
+    ///
+    /// To compute a signed delta across rollover: `wrapping_sub` the previous reading.
     pub right_encoder_counts: Option<u16>,
     pub light_bumper: Option<u8>,
     pub light_bump_left_signal: Option<u16>,
@@ -410,20 +428,19 @@ impl SensorData {
     // Stasis (packet 58)
     // -----------------------------------------------------------------------
 
-    /// Returns `true` if the stasis signal is toggling (robot is moving forward).
+    /// Returns `true` if the robot is making forward progress (Create 2).
+    ///
+    /// Per the Create 2 OI spec, packet 58 (stasis) encodes:
+    /// - Bit 0 = 1: the robot is making forward progress (wheels turning, not
+    ///   slipping, sensor clean).
+    /// - Bit 0 = 0: no forward progress (stopped, spinning in place, or sensor
+    ///   dirty).
+    ///
+    /// Bits 1–7 are reserved and should be ignored.
     #[inline(always)]
-    pub const fn is_stasis_toggling(&self) -> Option<bool> {
+    pub const fn is_stasis_detected(&self) -> Option<bool> {
         match self.stasis {
             Some(b) => Some(b & 0x01 != 0),
-            None => None,
-        }
-    }
-
-    /// Returns `true` if stasis is disabled (Create 1 backward-compatibility mode).
-    #[inline(always)]
-    pub const fn is_stasis_disabled(&self) -> Option<bool> {
-        match self.stasis {
-            Some(b) => Some(b & 0x02 != 0),
             None => None,
         }
     }
@@ -442,8 +459,8 @@ impl SensorData {
             16 => self.dirt_detect_right = Some(decode_u8(data)?),
             17 => self.ir_omni = Some(IrChar::from_raw(decode_u8(data)?)),
             18 => self.buttons = Some(decode_u8(data)?),
-            19 => self.distance = Some(decode_i16(data)?),
-            20 => self.angle = Some(decode_i16(data)?),
+            19 => self.distance_delta_mm = Some(decode_i16(data)?),
+            20 => self.angle_delta_deg = Some(decode_i16(data)?),
             21 => self.charging_state = Some(ChargingState::from_raw(decode_u8(data)?)),
             22 => self.voltage = Some(decode_u16(data)?),
             23 => self.current = Some(decode_i16(data)?),
@@ -625,5 +642,33 @@ mod tests {
             let data: Vec<u8> = vec![0; p.len as usize];
             sd.decode_packet(p.id, &data).unwrap();
         }
+    }
+
+    #[test]
+    fn decode_distance_angle_fields() {
+        let mut sd = SensorData::default();
+        // distance = +500 mm = 0x01F4
+        sd.decode_packet(19, &[0x01, 0xF4]).unwrap();
+        assert_eq!(sd.distance_delta_mm, Some(500));
+        // angle = -90 deg = 0xFFA6
+        sd.decode_packet(20, &[0xFF, 0xA6]).unwrap();
+        assert_eq!(sd.angle_delta_deg, Some(-90));
+    }
+
+    #[test]
+    fn stasis_detected_accessor() {
+        let mut sd = SensorData::default();
+        // bit 0 set → forward progress detected
+        sd.decode_packet(58, &[0x01]).unwrap();
+        assert_eq!(sd.is_stasis_detected(), Some(true));
+        // bit 0 clear → no forward progress
+        sd.decode_packet(58, &[0x00]).unwrap();
+        assert_eq!(sd.is_stasis_detected(), Some(false));
+        // reserved bits set but bit 0 clear
+        sd.decode_packet(58, &[0xFE]).unwrap();
+        assert_eq!(sd.is_stasis_detected(), Some(false));
+        // reserved bits + bit 0 → detected
+        sd.decode_packet(58, &[0xFF]).unwrap();
+        assert_eq!(sd.is_stasis_detected(), Some(true));
     }
 }

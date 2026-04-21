@@ -68,15 +68,28 @@
 - bare → pure no_std async API only (Embassy compatible)
 
 ### Test Summary
-- 44 unit tests (protocol)
-- 25 unit tests (types + control)
-- 21 sync mock robot integration tests
-- 19 async mock robot integration tests
+- 51 unit tests (protocol, +7 from Round 2+3)
+- 33 unit tests (types + control, +8 from Round 2+3)
+- 28 sync mock robot integration tests (+7 from Round 2+3)
+- 27 async mock robot integration tests (+8 from Round 2+3)
 - 1 protocol doc test
 - `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅
 - `just check-nostd` passes: no_std + Embassy thumbv7em-none-eabihf ✅
 
+- [x] **Round 2 correctness (rubber-duck review: EOF, vacuum guard, song in Passive, trailing bytes)**:
+  - **Bug fix**: `MockAsyncTransport::read()` now returns `Ok(0)` when `eof_on_read == true` (same as sync)
+  - **Bug fix**: `set_motors_pwm` in sync+async rejects i8::MIN before send (validate-before-send)
+  - **Feature**: `define_song` now available in Passive mode (was incorrectly gated behind Actuatable)
+  - **Bug fix**: `decode_packets` returns `ProtocolError::UnexpectedData { trailing }` on trailing bytes
+  - Added 4 async integration tests + 1 protocol unit test
+- [x] **Round 3 OI spec compliance (rubber-duck reviews, Groups A + B)**:
+  - **Bug fix (blocking)**: `set_motors_pwm` vacuum parameter: added guard `vacuum < 0 → ValidationError`; OI spec defines vacuum range as 0..=127 (no reverse direction), previously negative values slipped through
+  - **Bug fix**: `OI_MAX_SONG_NUMBER` was 3, now 4 (Create 2 OI spec §5.13 allows song slots 0–4)
+  - **Spec fix**: Stasis accessors (`is_stasis_toggling`, `is_stasis_disabled`) replaced with `is_stasis_detected()` per Create 2 spec (bit 0 = forward progress; bit 1 was incorrectly modeled)
+  - **Rename (semantic clarity)**: `SensorData::distance` → `distance_delta_mm`, `angle` → `angle_delta_deg`; both are delta accumulators that reset on each read, not absolute values
+  - **Doc fix**: Added detailed doc comments to `distance_delta_mm` and `angle_delta_deg` explaining accumulator-reset semantics
+  - **Doc fix**: Added doc comments to `left_encoder_counts`/`right_encoder_counts` noting u16 wraparound and how to compute signed deltas
+  - **Bug fix**: `StreamParser` default capacity 256 → 258; maximum valid OI frame is 258 bytes (N=255 payload + 3 framing bytes); previously N=254/255 frames were rejected as oversized
+  - Updated tests: vacuum guard tests extended (negative + boundary), song number tests updated, new `decode_distance_angle_fields` + `stasis_detected_accessor` tests
+
 ### Remaining
-- [ ] Hardware integration tests (requires physical robot)
-- [ ] Publish to crates.io
-- [ ] Version bump coordination (0.4.0)
