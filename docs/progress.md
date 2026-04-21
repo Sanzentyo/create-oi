@@ -202,3 +202,40 @@ rejected as over-engineering. Key reasons:
 
 ### Result
 168 tests pass, CI green. Transport API is now simpler and consistent with `AsyncTransport`.
+
+## Round 9 — Model-gated opcodes, stop() fix, reset() in Off mode (commit 3d42fa3)
+
+### Goal
+Fix OI spec compliance issues found in Round 1 audit: 7 opcodes that are Create 2–only
+were missing model guards, `stop()` used wrong opcode, and `reset()` was unavailable
+in Off mode.
+
+### Changes
+- **`RobotModel::is_create2()`** — centralized helper in `types.rs`; replaces ad-hoc
+  model checks throughout the codebase
+- **Model gates on 7 Create 2–only opcodes** (both sync and async):
+  `drive_pwm`, `set_digit_leds`, `set_motors_pwm`, `set_digit_leds_raw`,
+  `simulate_buttons`, `set_date`, `set_schedule` — return `ValidationError`
+  on Create1 or Roomba400 before any bytes are sent
+- **`stop()` opcode fix**: was `encode_drive(0, 0)` (opcode 137, DRIVE) — now
+  `encode_drive_direct(0, 0)` (opcode 145, DRIVE_DIRECT). Radius=0 is not a valid OI
+  DRIVE value; DRIVE_DIRECT(0,0) directly expresses "zero both wheels"
+- **`reset()` in Off mode** (sync and async): OI spec says RESET (opcode 7) is
+  available at any time; returns the transport wrapped in `ConnectError<T, E>` for
+  recovery, matching the `start()` API
+- **Removed `transport_mut()`** — had zero callers, bypassed TypeState guarantees;
+  deleted entirely rather than making it dead code
+
+### Tests added (18 new)
+- `reset_available_in_off_mode` / `async_reset_available_in_off_mode`
+- `drive_pwm_rejects_create1_before_send` / `_roomba400_before_send` (sync + async = 4)
+- `set_motors_pwm_rejects_create1_before_send` (sync + async = 2)
+- `set_digit_leds_rejects_create1_before_send` (sync + async = 2)
+- `set_digit_leds_raw_rejects_create1_before_send` (sync + async = 2)
+- `simulate_buttons_rejects_create1_before_send` (sync + async = 2)
+- `set_schedule_rejects_create1_before_send` (sync + async = 2)
+- `set_date_rejects_create1_before_send` (sync + async = 2)
+- Updated `stop_sends_zero_drive` / `async_stop_sends_zero_drive` to assert opcode 145
+
+### Result
+186 tests pass (41 unit + 45 sync + 44 async + 56 protocol). CI green.

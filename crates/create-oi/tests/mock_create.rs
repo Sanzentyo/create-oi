@@ -844,3 +844,210 @@ fn reset_available_in_off_mode() {
     let transport = create.reset().unwrap();
     assert_eq!(transport.written_bytes(), &[7]); // OPCODE 7 = RESET
 }
+
+// ---------------------------------------------------------------------------
+// Round 10: to_off() model gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn to_off_rejects_create1_before_send_from_passive() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().unwrap_err();
+    assert!(
+        matches!(err.source, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn to_off_rejects_roomba400_before_send_from_passive() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Roomba400);
+    let create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().unwrap_err();
+    assert!(
+        matches!(err.source, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn to_off_rejects_create1_before_send_from_safe() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().unwrap_err();
+    assert!(matches!(err.source, create_oi::error::Error::Validation(_)));
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn to_off_rejects_create1_before_send_from_full() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().unwrap_err();
+    assert!(matches!(err.source, create_oi::error::Error::Validation(_)));
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn to_off_succeeds_on_create2_sends_stop_opcode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let off = create.to_off().unwrap();
+    let written = off.transport().written_bytes();
+    assert_eq!(
+        written[bytes_before], 173,
+        "expected STOP opcode 173, got {}",
+        written[bytes_before]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: power_off() returns Create<Passive, T> and clears stream state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn power_off_returns_passive_handle() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    // power_off() must now return Create<Passive, _>, not T
+    let passive = create.power_off().unwrap();
+    let written = passive.transport().written_bytes();
+    // POWER opcode = 133
+    assert_eq!(
+        written[bytes_before], 133,
+        "expected POWER opcode 133, got {}",
+        written[bytes_before]
+    );
+}
+
+#[test]
+fn power_off_clears_streaming_state() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+
+    // Start a stream first
+    create.start_stream(&[8u8]).unwrap();
+    // After power_off(), the returned handle must have streaming=false
+    let mut passive = create.power_off().unwrap();
+    // query_sensor_raw should NOT return a ValidationError about streaming
+    let result = passive.query_sensor_raw(8);
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "power_off should have cleared streaming state, got ValidationError"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: set_date / set_schedule available in Passive and Safe modes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_date_available_in_passive_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+
+    // Must compile and succeed (no FullControl requirement)
+    create.set_date(DayOfWeek::Monday, 10, 30).unwrap();
+    // SET_DAY_TIME opcode = 168
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&168), "expected opcode 168 in payload");
+}
+
+#[test]
+fn set_date_available_in_safe_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+
+    create.set_date(DayOfWeek::Friday, 9, 0).unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&168), "expected opcode 168 in payload");
+}
+
+#[test]
+fn set_schedule_available_in_passive_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+
+    // Must compile and succeed (no FullControl requirement)
+    create
+        .set_schedule(
+            0b0000001,
+            [(8, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .unwrap();
+    // SCHEDULE opcode = 167
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&167), "expected opcode 167 in payload");
+}
+
+#[test]
+fn set_schedule_available_in_safe_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+
+    create
+        .set_schedule(
+            0b0000010,
+            [(0, 0), (7, 30), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&167), "expected opcode 167 in payload");
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: clean() / seek_dock() Passive-only
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clean_available_in_passive_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
+
+    let passive = create.clean(CleanMode::Default).unwrap();
+    // CLEAN opcode = 135
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&135), "expected opcode 135 in payload");
+}
+
+#[test]
+fn seek_dock_available_in_passive_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
+
+    let passive = create.seek_dock().unwrap();
+    // DOCK opcode = 143
+    let written = passive.transport().written_bytes();
+    assert!(
+        written.contains(&143),
+        "expected DOCK opcode 143 in payload"
+    );
+}

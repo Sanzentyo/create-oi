@@ -826,3 +826,207 @@ async fn async_reset_available_in_off_mode() {
     let transport = create.reset().await.unwrap();
     assert_eq!(transport.written_bytes(), &[7]); // OPCODE 7 = RESET
 }
+
+// ---------------------------------------------------------------------------
+// Round 10: to_off() model gate (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_to_off_rejects_create1_before_send_from_passive() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let create = create.start().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().await.unwrap_err();
+    assert!(
+        matches!(err.source, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_to_off_rejects_roomba400_before_send_from_passive() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Roomba400);
+    let create = create.start().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().await.unwrap_err();
+    assert!(
+        matches!(err.source, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_to_off_rejects_create1_before_send_from_safe() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let create = create.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().await.unwrap_err();
+    assert!(matches!(err.source, create_oi::error::Error::Validation(_)));
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_to_off_rejects_create1_before_send_from_full() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create1);
+    let create = create.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let err = create.to_off().await.unwrap_err();
+    assert!(matches!(err.source, create_oi::error::Error::Validation(_)));
+    assert_eq!(err.create.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_to_off_succeeds_on_create2_sends_stop_opcode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let create = create.start().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let off = create.to_off().await.unwrap();
+    let written = off.transport().written_bytes();
+    assert_eq!(
+        written[bytes_before], 173,
+        "expected STOP opcode 173, got {}",
+        written[bytes_before]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: power_off() returns AsyncCreate<Passive, T> and clears stream (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_power_off_returns_passive_handle() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let create = create.start().await.unwrap();
+    let bytes_before = create.transport().written_bytes().len();
+
+    let passive = create.power_off().await.unwrap();
+    let written = passive.transport().written_bytes();
+    // POWER opcode = 133
+    assert_eq!(
+        written[bytes_before], 133,
+        "expected POWER opcode 133, got {}",
+        written[bytes_before]
+    );
+}
+
+#[tokio::test]
+async fn async_power_off_clears_streaming_state() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let mut create = create.start().await.unwrap();
+
+    // Start a stream first
+    create.start_stream(&[8u8]).await.unwrap();
+    // After power_off(), the returned handle must have streaming=false
+    let mut passive = create.power_off().await.unwrap();
+    // query_sensor_raw should NOT return a ValidationError about streaming
+    let result = passive.query_sensor_raw(8).await;
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "power_off should have cleared streaming state, got ValidationError"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: set_date / set_schedule available in Passive and Safe modes (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_set_date_available_in_passive_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let mut create = create.start().await.unwrap();
+
+    create.set_date(DayOfWeek::Monday, 10, 30).await.unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&168), "expected opcode 168 in payload");
+}
+
+#[tokio::test]
+async fn async_set_date_available_in_safe_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+
+    create.set_date(DayOfWeek::Friday, 9, 0).await.unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&168), "expected opcode 168 in payload");
+}
+
+#[tokio::test]
+async fn async_set_schedule_available_in_passive_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let mut create = create.start().await.unwrap();
+
+    create
+        .set_schedule(
+            0b0000001,
+            [(8, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .await
+        .unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&167), "expected opcode 167 in payload");
+}
+
+#[tokio::test]
+async fn async_set_schedule_available_in_safe_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let mut create = create.start().await.unwrap().to_safe().await.unwrap();
+
+    create
+        .set_schedule(
+            0b0000010,
+            [(0, 0), (7, 30), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .await
+        .unwrap();
+    let written = create.transport().written_bytes();
+    assert!(written.contains(&167), "expected opcode 167 in payload");
+}
+
+// ---------------------------------------------------------------------------
+// Round 10: clean() / seek_dock() Passive-only (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_clean_available_in_passive_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let create = create.start().await.unwrap();
+
+    let passive = create.clean(CleanMode::Default).await.unwrap();
+    // CLEAN opcode = 135
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&135), "expected opcode 135 in payload");
+}
+
+#[tokio::test]
+async fn async_seek_dock_available_in_passive_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2);
+    let create = create.start().await.unwrap();
+
+    let passive = create.seek_dock().await.unwrap();
+    // DOCK opcode = 143
+    let written = passive.transport().written_bytes();
+    assert!(
+        written.contains(&143),
+        "expected DOCK opcode 143 in payload"
+    );
+}

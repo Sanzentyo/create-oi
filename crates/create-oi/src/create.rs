@@ -115,10 +115,61 @@ impl<T: Transport> Create<Passive, T> {
 
     /// Send STOP and transition to Off mode.
     ///
-    /// The OI session is ended. To reconnect, create a new
-    /// `Create::<Off, _>::new(transport, model)`.
+    /// STOP (opcode 173) is a Create 2–only command. Returns `ValidationError`
+    /// on Create 1 or Roomba 400. The OI session is ended; to reconnect,
+    /// create a new `Create::<Off, _>::new(transport, model)`.
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(TransitionError {
+                create: self,
+                source: Error::Validation(ValidationError {
+                    field: "model",
+                    reason: "to_off (OPCODE 173 STOP) requires Create 2; not supported on Create 1 or Roomba 400",
+                }),
+            });
+        }
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
+            return Err(TransitionError {
+                create: self,
+                source: e,
+            });
+        }
+        Ok(self.cleared_transition())
+    }
+
+    /// Initiate a cleaning cycle. Transitions the robot to Passive mode.
+    ///
+    /// Per the OI spec, CLEAN/SPOT/MAX are only valid from Passive mode.
+    ///
+    /// The OI spec defines three cleaning modes:
+    /// - [`CleanMode::Default`] — standard cleaning pattern
+    /// - [`CleanMode::Spot`] — spot cleaning (small area)
+    /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
+    pub fn clean(
+        mut self,
+        mode: CleanMode,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        let cmd = match mode {
+            CleanMode::Default => command::encode_clean(),
+            CleanMode::Spot => command::encode_spot(),
+            CleanMode::Max => command::encode_max(),
+        };
+        if let Err(e) = self.send_cmd(&cmd) {
+            return Err(TransitionError {
+                create: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Seek the dock. Transitions the robot to Passive mode.
+    ///
+    /// Per the OI spec, SEEK_DOCK is only valid from Passive mode.
+    pub fn seek_dock(
+        mut self,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_dock()) {
             return Err(TransitionError {
                 create: self,
                 source: e,
@@ -156,14 +207,26 @@ impl<T: Transport> Create<Safe, T> {
     }
 
     /// Send STOP and transition to Off mode.
+    ///
+    /// STOP (opcode 173) is a Create 2–only command. Returns `ValidationError`
+    /// on Create 1 or Roomba 400.
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(TransitionError {
+                create: self,
+                source: Error::Validation(ValidationError {
+                    field: "model",
+                    reason: "to_off (OPCODE 173 STOP) requires Create 2; not supported on Create 1 or Roomba 400",
+                }),
+            });
+        }
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
             return Err(TransitionError {
                 create: self,
                 source: e,
             });
         }
-        Ok(self.transition())
+        Ok(self.cleared_transition())
     }
 }
 
@@ -195,14 +258,26 @@ impl<T: Transport> Create<Full, T> {
     }
 
     /// Send STOP and transition to Off mode.
+    ///
+    /// STOP (opcode 173) is a Create 2–only command. Returns `ValidationError`
+    /// on Create 1 or Roomba 400.
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if !self.model.is_create2() {
+            return Err(TransitionError {
+                create: self,
+                source: Error::Validation(ValidationError {
+                    field: "model",
+                    reason: "to_off (OPCODE 173 STOP) requires Create 2; not supported on Create 1 or Roomba 400",
+                }),
+            });
+        }
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
             return Err(TransitionError {
                 create: self,
                 source: e,
             });
         }
-        Ok(self.transition())
+        Ok(self.cleared_transition())
     }
 }
 
@@ -378,55 +453,21 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         Ok(())
     }
 
-    /// Initiate a cleaning cycle. Transitions the robot to Passive mode.
+    /// Send the POWER command, putting the robot into Passive charging mode.
     ///
-    /// The OI spec defines three cleaning modes:
-    /// - [`CleanMode::Default`] — standard cleaning pattern
-    /// - [`CleanMode::Spot`] — spot cleaning (small area)
-    /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
-    pub fn clean(
-        mut self,
-        mode: CleanMode,
-    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
-        let cmd = match mode {
-            CleanMode::Default => command::encode_clean(),
-            CleanMode::Spot => command::encode_spot(),
-            CleanMode::Max => command::encode_max(),
-        };
-        if let Err(e) = self.send_cmd(&cmd) {
-            return Err(TransitionError {
-                create: self,
-                source: e,
-            });
-        }
-        Ok(self.transition())
-    }
-
-    /// Seek the dock. Transitions the robot to Passive mode.
-    pub fn seek_dock(
+    /// After this call the robot enters Passive mode and begins charging.
+    /// The returned handle can be used to continue interactions or gracefully
+    /// transition to other modes. The stream state is cleared.
+    pub fn power_off(
         mut self,
     ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
-        if let Err(e) = self.send_cmd(&command::encode_dock()) {
-            return Err(TransitionError {
-                create: self,
-                source: e,
-            });
-        }
-        Ok(self.transition())
-    }
-
-    /// Power off the robot and return the underlying transport.
-    ///
-    /// After this call the robot is powered down. To reconnect, wrap the
-    /// returned transport in a new `Create::<Off, _>::new(transport, model)`.
-    pub fn power_off(mut self) -> Result<T, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_power()) {
             return Err(TransitionError {
                 create: self,
                 source: e,
             });
         }
-        Ok(self.transport)
+        Ok(self.cleared_transition())
     }
 
     /// Reset the robot and return the underlying transport.
@@ -698,13 +739,18 @@ impl<M: FullControl, T: Transport> Create<M, T> {
         }
         self.send_cmd(&command::encode_buttons(buttons.to_raw()))
     }
+}
 
-    /// Set the robot's internal date and time (Full mode only).
+// ---------------------------------------------------------------------------
+// Scheduling commands (Passive, Safe, Full) — Create 2 only
+// ---------------------------------------------------------------------------
+
+impl<M: SensorReadable, T: Transport> Create<M, T> {
+    /// Set the robot's internal date and time.
     ///
-    /// Returns an error if `hour` is not 0–23 or `minute` is not 0–59.
-    ///
-    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 168 is
-    /// not supported on Create 1 or Roomba 400).
+    /// Per the OI spec, SET_DAY_TIME (opcode 168) is available in
+    /// Passive, Safe, and Full modes. Returns `ValidationError` if this model
+    /// is not Create 2, or if `hour`/`minute` are out of range.
     pub fn set_date(
         &mut self,
         day: DayOfWeek,
@@ -732,15 +778,14 @@ impl<M: FullControl, T: Transport> Create<M, T> {
         self.send_cmd(&command::encode_date(day.to_raw(), hour, minute))
     }
 
-    /// Set the weekly cleaning schedule (Full mode only).
+    /// Set the weekly cleaning schedule.
     ///
-    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday). Bits 7 must be 0.
+    /// Per the OI spec, SCHEDULE (opcode 167) is available in
+    /// Passive, Safe, and Full modes. Returns `ValidationError` if this model
+    /// is not Create 2.
+    ///
+    /// `days`: bitmask of scheduled days (bit 0=Sunday, bit 6=Saturday). Bit 7 must be 0.
     /// `times`: (hour, minute) for each day, starting with Sunday.
-    ///
-    /// Returns an error if `days` has reserved bits set or any time is out of range.
-    ///
-    /// Returns `ValidationError` if this model is not Create 2 (OPCODE 167 is
-    /// not supported on Create 1 or Roomba 400).
     pub fn set_schedule(
         &mut self,
         days: u8,
@@ -859,6 +904,21 @@ impl<M: Mode, T: Transport> Create<M, T> {
             model: self.model,
             stream_parser: self.stream_parser,
             streaming: self.streaming,
+            _mode: PhantomData,
+        }
+    }
+
+    /// Like `transition`, but also resets streaming state.
+    ///
+    /// Use this when transitioning to a mode where the current stream session
+    /// cannot continue (e.g. Off mode, or power_off → Passive).
+    #[inline(always)]
+    fn cleared_transition<N: Mode>(self) -> Create<N, T> {
+        Create {
+            transport: self.transport,
+            model: self.model,
+            stream_parser: StreamParser::new(),
+            streaming: false,
             _mode: PhantomData,
         }
     }
