@@ -272,3 +272,100 @@ async fn async_into_transport_recovers() {
     let transport = robot.into_transport();
     assert_eq!(transport.written_bytes(), &[128]); // START was written
 }
+
+// ---------------------------------------------------------------------------
+// Validation error path tests (validate-before-send)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_set_date_invalid_hour_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_date(DayOfWeek::Monday, 24, 0).await.unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected Validation error, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_date_invalid_minute_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_date(DayOfWeek::Monday, 0, 60).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_schedule_invalid_days_mask_rejects() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_schedule(0x80, [(0, 0); 7]).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_set_schedule_invalid_time_rejects() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_full().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot
+        .set_schedule(
+            0x7F,
+            [(0, 0), (0, 0), (0, 0), (25, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_start_stream_unsupported_model_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Roomba400);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.start_stream(&[8, 22]).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let mut buf = [0u8; 32];
+    let err = robot
+        .query_sensor_raw_into(0xFF, &mut buf)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            create_oi::error::Error::Protocol(
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(0xFF)
+            )
+        ),
+        "expected UnknownPacketId error, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}

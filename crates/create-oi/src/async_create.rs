@@ -174,9 +174,6 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
 impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query a single sensor packet by ID into a caller-provided buffer.
     ///
-    /// Returns the number of bytes written to `buf`.
-    /// Query a single sensor packet by ID into a caller-provided buffer.
-    ///
     /// Validates the packet ID and buffer size before sending any bytes to the robot.
     /// Returns the number of bytes written.
     #[must_use = "query result must be used"]

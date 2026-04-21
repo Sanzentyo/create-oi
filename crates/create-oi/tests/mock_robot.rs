@@ -301,3 +301,124 @@ fn into_transport_recovers() {
     let transport = robot.into_transport();
     assert_eq!(transport.written_bytes(), &[128]); // START was written
 }
+
+// ---------------------------------------------------------------------------
+// Validation error path tests (validate-before-send)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_date_invalid_hour_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_full().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_date(DayOfWeek::Monday, 24, 0).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected Validation error, got {err:?}"
+    );
+    // No additional bytes should have been sent
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_date_invalid_minute_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_full().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_date(DayOfWeek::Monday, 0, 60).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_schedule_invalid_days_mask_rejects() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_full().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot
+        .set_schedule(0x80, [(0, 0); 7]) // bit 7 set — reserved
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn set_schedule_invalid_time_rejects() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_full().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    // Wednesday has hour = 25 (invalid)
+    let err = robot
+        .set_schedule(
+            0x7F,
+            [(0, 0), (0, 0), (0, 0), (25, 0), (0, 0), (0, 0), (0, 0)],
+        )
+        .unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn start_stream_unsupported_model_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Roomba400);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.start_stream(&[8, 22]).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn define_song_too_many_notes_rejects() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_full().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    // 17 notes — exceeds the 16-note OI spec limit
+    let notes = [(60u8, 32u8); 17];
+    let err = robot
+        .define_song(SongNumber::new(0).unwrap(), &notes)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            create_oi::error::Error::Protocol(
+                create_oi_protocol::error::ProtocolError::TooManyItems { max: 16, .. }
+            )
+        ),
+        "expected TooManyItems error, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[test]
+fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let mut buf = [0u8; 32];
+    let err = robot.query_sensor_raw_into(0xFF, &mut buf).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            create_oi::error::Error::Protocol(
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(0xFF)
+            )
+        ),
+        "expected UnknownPacketId error, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}

@@ -222,6 +222,13 @@ impl core::fmt::Display for AngularVelocity {
     }
 }
 
+impl TryFrom<f32> for AngularVelocity {
+    type Error = ValidationError;
+    fn try_from(v: f32) -> Result<Self, Self::Error> {
+        Self::new(v)
+    }
+}
+
 /// Turn radius for the OI `drive` command.
 ///
 /// The OI protocol uses special i16 values for straight and in-place turns,
@@ -310,6 +317,17 @@ impl core::fmt::Display for Radius {
     }
 }
 
+impl TryFrom<f32> for Radius {
+    type Error = ValidationError;
+    /// Construct a `Radius::Curve` from a value in meters.
+    ///
+    /// Use `Radius::Straight`, `Radius::TurnInPlaceCw`, or `Radius::TurnInPlaceCcw`
+    /// for the special OI values; those cannot be represented as a float.
+    fn try_from(v: f32) -> Result<Self, Self::Error> {
+        Self::new(v)
+    }
+}
+
 /// Motor power level. Valid range: [-1.0, 1.0].
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct MotorPower(f32);
@@ -339,6 +357,13 @@ impl MotorPower {
 impl core::fmt::Display for MotorPower {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:.3}", self.0)
+    }
+}
+
+impl TryFrom<f32> for MotorPower {
+    type Error = ValidationError;
+    fn try_from(v: f32) -> Result<Self, Self::Error> {
+        Self::new(v)
     }
 }
 
