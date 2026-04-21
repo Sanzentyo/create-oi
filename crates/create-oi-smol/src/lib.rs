@@ -1,4 +1,4 @@
-//! Smol async transport for the robot.
+//! Smol async transport for the Create/Roomba.
 //!
 //! Uses [`smol::Unblock`] to wrap the native `serialport::TTYPort` for
 //! non-blocking async I/O on the smol runtime. Blocking I/O is dispatched
@@ -15,7 +15,7 @@ use std::io;
 use std::time::Duration;
 
 use create_oi::transport::AsyncTransport;
-use create_oi::types::CreateRobotModel;
+use create_oi::types::RobotModel;
 use smol::Unblock;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -37,7 +37,7 @@ impl SmolTransport {
     /// Uses the native baud rate for the model:
     /// - Create 2: 115200
     /// - Create 1: 57600
-    pub fn open(path: &str, model: CreateRobotModel) -> io::Result<Self> {
+    pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
         Self::open_with_baud(path, model.baud())
     }
 

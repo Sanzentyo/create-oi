@@ -12,28 +12,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "/dev/ttyUSB0".into());
 
     println!("Opening {port}...");
-    let transport = SerialTransport::open(&port, CreateRobotModel::Create2)?;
+    let transport = SerialTransport::open(&port, RobotModel::Create2)?;
 
     // Connect — enters Off → Passive
-    let robot = Create::new(transport, CreateRobotModel::Create2);
-    let robot = robot.start().map_err(|e| e.source)?;
+    let create = Create::new(transport, RobotModel::Create2);
+    let create = create.start().map_err(|e| e.source)?;
 
     // Passive → Safe
-    let mut robot = robot.to_safe().map_err(|e| e.source)?;
+    let mut create = create.to_safe().map_err(|e| e.source)?;
 
     // Query battery voltage
-    let sd = robot.query_list(&[22])?;
+    let sd = create.query_list(&[22])?;
     println!("Battery voltage: {:?} mV", sd.voltage);
 
     // Drive forward at 200 mm/s straight
-    robot.drive(Velocity::new(0.2)?, Radius::STRAIGHT)?;
+    create.drive(Velocity::new(0.2)?, Radius::STRAIGHT)?;
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Stop motors
-    robot.stop()?;
+    create.stop()?;
 
     // Return to passive mode (stop is already done)
-    let _robot = robot.to_passive().map_err(|e| e.source)?;
+    let _create = create.to_passive().map_err(|e| e.source)?;
     // Robot is dropped here, transport closes automatically.
 
     println!("Done!");

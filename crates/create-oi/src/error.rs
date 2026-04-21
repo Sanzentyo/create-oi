@@ -83,12 +83,12 @@ impl<E> From<ValidationError> for Error<E> {
 #[cfg(feature = "std")]
 pub type StdError = Error<std::io::Error>;
 
-/// Error returned when a mode transition fails, preserving the robot
+/// Error returned when a mode transition fails, preserving the Create instance
 /// so the caller can recover.
 #[derive(Debug)]
 pub struct TransitionError<R, E> {
-    /// The robot, returned in its original mode.
-    pub robot: R,
+    /// The Create instance, returned in its original mode.
+    pub create: R,
     /// The underlying error.
     pub source: Error<E>,
 }

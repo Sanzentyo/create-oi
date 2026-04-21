@@ -1,4 +1,4 @@
-//! Mock transport and integration-level robot tests.
+//! Mock transport and integration-level Create tests.
 
 use std::io;
 use std::time::Duration;
@@ -13,9 +13,9 @@ use create_oi::transport::Transport;
 /// A mock transport that records writes and replays pre-loaded read data.
 #[derive(Debug)]
 struct MockTransport {
-    /// Bytes written by the robot.
+    /// Bytes written by the create.
     written: Vec<u8>,
-    /// Bytes to be read by the robot (pre-loaded).
+    /// Bytes pre-loaded for the Create to read.
     read_buf: Vec<u8>,
     /// Current read position.
     read_pos: usize,
@@ -110,102 +110,102 @@ impl Transport for MockTransport {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn robot_start_sends_start_opcode() {
+fn create_start_sends_start_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let create = Create::new(mock, RobotModel::Create2);
 
     // start() transitions Off → Passive
-    let robot = robot.start().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.start().unwrap();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128]); // START opcode
 }
 
 #[test]
-fn robot_passive_to_safe_sends_safe_opcode() {
+fn create_passive_to_safe_sends_safe_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
 
-    let robot = robot.to_safe().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.to_safe().unwrap();
+    let written = create.transport().written_bytes();
     // START(128) + SAFE(131)
     assert_eq!(written, &[128, 131]);
 }
 
 #[test]
-fn robot_passive_to_full_sends_full_opcode() {
+fn create_passive_to_full_sends_full_opcode() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
 
-    let robot = robot.to_full().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.to_full().unwrap();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128, 132]); // START + FULL
 }
 
 #[test]
-fn robot_safe_to_full() {
+fn create_safe_to_full() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap().to_safe().unwrap();
 
-    let robot = robot.to_full().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.to_full().unwrap();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128, 131, 132]);
 }
 
 #[test]
-fn robot_full_to_safe() {
+fn create_full_to_safe() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap().to_full().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap().to_full().unwrap();
 
-    let robot = robot.to_safe().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.to_safe().unwrap();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128, 132, 131]);
 }
 
 #[test]
-fn robot_passive_to_off() {
+fn create_passive_to_off() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
 
-    let off = robot.to_off().unwrap();
+    let off = create.to_off().unwrap();
     let transport = off.into_transport();
     assert_eq!(transport.written_bytes(), &[128, 173]); // START + STOP
 }
 
 #[test]
-fn robot_safe_to_off() {
+fn create_safe_to_off() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap().to_safe().unwrap();
 
-    let off = robot.to_off().unwrap();
+    let off = create.to_off().unwrap();
     let transport = off.into_transport();
     assert_eq!(transport.written_bytes(), &[128, 131, 173]); // START + SAFE + STOP
 }
 
 #[test]
-fn robot_full_to_off() {
+fn create_full_to_off() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap().to_full().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap().to_full().unwrap();
 
-    let off = robot.to_off().unwrap();
+    let off = create.to_off().unwrap();
     let transport = off.into_transport();
     assert_eq!(transport.written_bytes(), &[128, 132, 173]); // START + FULL + STOP
 }
 
 #[test]
-fn robot_full_to_passive() {
+fn create_full_to_passive() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap().to_full().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap().to_full().unwrap();
 
-    let robot = robot.to_passive().unwrap();
-    let written = robot.transport().written_bytes();
+    let create = create.to_passive().unwrap();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128, 132, 128]); // START + FULL + START
 }
 
@@ -217,14 +217,14 @@ fn robot_full_to_passive() {
 fn query_single_sensor() {
     // OI mode (packet 35) = 2 (Safe), 1 byte response
     let mock = MockTransport::with_read_data(&[2]);
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
 
-    let sd = robot.query_sensor(35).unwrap();
+    let sd = create.query_sensor(35).unwrap();
     assert_eq!(sd.oi_mode, Some(OiMode::Safe));
 
     // Verify query command was sent: START(128) + SENSORS(142) + packet_id(35)
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     assert_eq!(written, &[128, 142, 35]);
 }
 
@@ -232,10 +232,10 @@ fn query_single_sensor() {
 fn query_list_multiple_sensors() {
     // wall(id=8, 1 byte) = 1, voltage(id=22, 2 bytes) = 12500 (0x30D4)
     let mock = MockTransport::with_read_data(&[1, 0x30, 0xD4]);
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
 
-    let sd = robot.query_list(&[8, 22]).unwrap();
+    let sd = create.query_list(&[8, 22]).unwrap();
     assert_eq!(sd.wall, Some(true));
     assert_eq!(sd.voltage, Some(12500));
 }
@@ -247,14 +247,14 @@ fn query_list_multiple_sensors() {
 #[test]
 fn drive_sends_correct_bytes() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
     let v = Velocity::new(0.2).unwrap();
     let r = Radius::new(0.5).unwrap();
-    robot.drive(v, r).unwrap();
+    create.drive(v, r).unwrap();
 
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     // START(128) + SAFE(131) + DRIVE(137) + vel_hi + vel_lo + rad_hi + rad_lo
     assert_eq!(written[0], 128); // START
     assert_eq!(written[1], 131); // SAFE
@@ -268,12 +268,12 @@ fn drive_sends_correct_bytes() {
 #[test]
 fn stop_sends_zero_drive() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
-    robot.stop().unwrap();
+    create.stop().unwrap();
 
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     // Last 5 bytes should be DRIVE(137) + 0,0,0,0
     let drive_cmd = &written[written.len() - 5..];
     assert_eq!(drive_cmd, &[137, 0, 0, 0, 0]);
@@ -286,10 +286,10 @@ fn stop_sends_zero_drive() {
 #[test]
 fn set_leds_sends_correct_bytes() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
-    robot
+    create
         .set_leds(
             true,
             false,
@@ -300,7 +300,7 @@ fn set_leds_sends_correct_bytes() {
         )
         .unwrap();
 
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     // LED cmd: [139, bits, color, intensity]
     let led_cmd = &written[written.len() - 4..];
     assert_eq!(led_cmd[0], 139);
@@ -320,24 +320,24 @@ fn connect_error_returns_transport() {
         closed: true,
         ..MockTransport::new()
     };
-    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let create = Create::new(mock, RobotModel::Create2);
 
-    let err = robot.start().unwrap_err();
+    let err = create.start().unwrap_err();
     // We get the transport back
     assert!(err.transport.closed);
 }
 
 // ---------------------------------------------------------------------------
-// TransitionError preserves robot
+// TransitionError preserves create instance
 // ---------------------------------------------------------------------------
 
 #[test]
-fn transition_error_returns_robot() {
+fn transition_error_returns_create() {
     // Verify that TransitionError<Robot<Passive, MockTransport>> compiles.
     // This is a compile-time check — the type system is the test.
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let _robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let _create = create.start().unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -347,9 +347,9 @@ fn transition_error_returns_robot() {
 #[test]
 fn into_transport_recovers() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let robot = robot.start().unwrap();
-    let transport = robot.into_transport();
+    let create = Create::new(mock, RobotModel::Create2);
+    let create = create.start().unwrap();
+    let transport = create.into_transport();
     assert_eq!(transport.written_bytes(), &[128]); // START was written
 }
 
@@ -360,85 +360,85 @@ fn into_transport_recovers() {
 #[test]
 fn set_date_invalid_hour_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_full().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
-    let err = robot.set_date(DayOfWeek::Monday, 24, 0).unwrap_err();
+    let err = create.set_date(DayOfWeek::Monday, 24, 0).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected Validation error, got {err:?}"
     );
     // No additional bytes should have been sent
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn set_date_invalid_minute_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_full().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
-    let err = robot.set_date(DayOfWeek::Monday, 0, 60).unwrap_err();
+    let err = create.set_date(DayOfWeek::Monday, 0, 60).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn set_schedule_invalid_days_mask_rejects() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_full().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
-    let err = robot
+    let err = create
         .set_schedule(0x80, [(0, 0); 7]) // bit 7 set — reserved
         .unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn set_schedule_invalid_time_rejects() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_full().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     // Wednesday has hour = 25 (invalid)
-    let err = robot
+    let err = create
         .set_schedule(
             0x7F,
             [(0, 0), (0, 0), (0, 0), (25, 0), (0, 0), (0, 0), (0, 0)],
         )
         .unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn start_stream_unsupported_model_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Roomba400);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Roomba400);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
-    let err = robot.start_stream(&[8, 22]).unwrap_err();
+    let err = create.start_stream(&[8, 22]).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn define_song_too_many_notes_rejects() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_full().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_full().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     // 17 notes — exceeds the 16-note OI spec limit
     let notes = [SongNote::new(60, 32).unwrap(); 17];
-    let err = robot
+    let err = create
         .define_song(SongNumber::new(0).unwrap(), &notes)
         .unwrap_err();
     assert!(
@@ -450,18 +450,18 @@ fn define_song_too_many_notes_rejects() {
         ),
         "expected TooManyItems error, got {err:?}"
     );
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     let mut buf = [0u8; 32];
-    let err = robot.query_sensor_raw_into(0xFF, &mut buf).unwrap_err();
+    let err = create.query_sensor_raw_into(0xFF, &mut buf).unwrap_err();
     assert!(
         matches!(
             err,
@@ -471,7 +471,7 @@ fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
         ),
         "expected UnknownPacketId error, got {err:?}"
     );
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -481,10 +481,10 @@ fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
 #[test]
 fn poll_stream_eof_returns_protocol_error() {
     let mock = MockTransport::with_eof_on_read();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
 
-    let err = robot.poll_stream().unwrap_err();
+    let err = create.poll_stream().unwrap_err();
     assert!(
         matches!(
             err,
@@ -503,13 +503,13 @@ fn poll_stream_eof_returns_protocol_error() {
 #[test]
 fn toggle_stream_unsupported_model_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Roomba400);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Roomba400);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
-    let err = robot.toggle_stream(true).unwrap_err();
+    let err = create.toggle_stream(true).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,32 +519,32 @@ fn toggle_stream_unsupported_model_rejects_before_send() {
 #[test]
 fn set_motors_pwm_invalid_values_reject_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     // i8::MIN (-128) is invalid for main_brush and side_brush
-    let err = robot.set_motors_pwm(i8::MIN, 0, 0).unwrap_err();
+    let err = create.set_motors_pwm(i8::MIN, 0, 0).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    let err = robot.set_motors_pwm(0, i8::MIN, 0).unwrap_err();
+    let err = create.set_motors_pwm(0, i8::MIN, 0).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
     // Negative vacuum is invalid per OI spec (vacuum is 0..=127 only)
-    let err = robot.set_motors_pwm(0, 0, -1).unwrap_err();
+    let err = create.set_motors_pwm(0, 0, -1).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
-    let err = robot.set_motors_pwm(0, 0, i8::MIN).unwrap_err();
+    let err = create.set_motors_pwm(0, 0, i8::MIN).unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 
     // Valid boundary values should succeed
-    robot.set_motors_pwm(0, 0, 0).unwrap();
-    robot.set_motors_pwm(0, 0, 127).unwrap();
-    robot.set_motors_pwm(-127, -127, 0).unwrap();
+    create.set_motors_pwm(0, 0, 0).unwrap();
+    create.set_motors_pwm(0, 0, 127).unwrap();
+    create.set_motors_pwm(-127, -127, 0).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -554,18 +554,18 @@ fn set_motors_pwm_invalid_values_reject_before_send() {
 #[test]
 fn define_song_available_in_passive() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let create = Create::new(mock, RobotModel::Create2);
     // define_song should compile and succeed in Passive mode
-    let mut robot = robot.start().unwrap();
+    let mut create = create.start().unwrap();
     let notes = [
         SongNote::new(69, 32).unwrap(),
         SongNote::new(71, 32).unwrap(),
     ];
-    robot
+    create
         .define_song(SongNumber::new(0).unwrap(), &notes)
         .unwrap();
     // Song opcode = 140
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     assert_eq!(written[1], 140);
 }
 
@@ -576,34 +576,34 @@ fn define_song_available_in_passive() {
 #[test]
 fn define_song_rejects_out_of_range_slot_for_create2() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     // Slot 5 is valid for Create 1 (max=15) but not for Create 2 (max=4)
     let song = SongNumber::new(5).unwrap();
-    let err = robot
+    let err = create
         .define_song(song, &[SongNote::new(69, 32).unwrap()])
         .unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for slot 5 on Create2, got {err:?}"
     );
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 #[test]
 fn define_song_accepts_slot_15_for_create1() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create1);
-    let mut robot = robot.start().unwrap();
+    let create = Create::new(mock, RobotModel::Create1);
+    let mut create = create.start().unwrap();
 
     let song = SongNumber::new(15).unwrap();
-    robot
+    create
         .define_song(song, &[SongNote::new(69, 32).unwrap()])
         .unwrap();
     // Song opcode 140 must appear in the written bytes with song number 15 after it
-    let written = robot.transport().written_bytes();
+    let written = create.transport().written_bytes();
     let pos = written
         .iter()
         .position(|&b| b == 140)
@@ -614,17 +614,17 @@ fn define_song_accepts_slot_15_for_create1() {
 #[test]
 fn play_song_rejects_out_of_range_slot_for_create2() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     let song = SongNumber::new(5).unwrap();
-    let err = robot.play_song(song).unwrap_err();
+    let err = create.play_song(song).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for slot 5 on Create2, got {err:?}"
     );
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -634,19 +634,19 @@ fn play_song_rejects_out_of_range_slot_for_create2() {
 #[test]
 fn start_stream_payload_overflow_rejects_before_send() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap();
-    let bytes_before = robot.transport().written_bytes().len();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap();
+    let bytes_before = create.transport().written_bytes().len();
 
     // Packet 8 (wall sensor) has 1 data byte → each entry costs 2 bytes in stream payload.
     // 128 × 2 = 256 > 255, so this should be rejected.
     let ids: Vec<u8> = vec![8u8; 128];
-    let err = robot.start_stream(&ids).unwrap_err();
+    let err = create.start_stream(&ids).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for oversized stream payload, got {err:?}"
     );
-    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+    assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,13 +656,13 @@ fn start_stream_payload_overflow_rejects_before_send() {
 #[test]
 fn query_sensor_raw_rejects_while_streaming() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
     // Packet 8 (wall) costs 2 bytes per cycle; use 1 → 2 bytes, well under 255
-    robot.start_stream(&[8u8]).unwrap();
+    create.start_stream(&[8u8]).unwrap();
 
-    let err = robot.query_sensor_raw(8).unwrap_err();
+    let err = create.query_sensor_raw(8).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError while streaming, got {err:?}"
@@ -672,15 +672,15 @@ fn query_sensor_raw_rejects_while_streaming() {
 #[test]
 fn query_resumes_after_toggle_stream_false() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
-    robot.start_stream(&[8u8]).unwrap();
-    robot.toggle_stream(false).unwrap();
+    create.start_stream(&[8u8]).unwrap();
+    create.toggle_stream(false).unwrap();
 
     // After disabling the stream, sensor queries should be accepted again.
     // (The mock just records the write; we only verify no ValidationError is raised.)
-    let result = robot.query_sensor_raw(8);
+    let result = create.query_sensor_raw(8);
     // Will error with Protocol::InsufficientData because mock has no read bytes loaded,
     // but NOT with ValidationError.
     assert!(
@@ -696,11 +696,11 @@ fn query_resumes_after_toggle_stream_false() {
 #[test]
 fn set_digit_leds_rejects_non_printable_ascii() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
     // Control character 0x01 is not printable ASCII
-    let err = robot.set_digit_leds(b'0', b'0', b'0', 0x01).unwrap_err();
+    let err = create.set_digit_leds(b'0', b'0', b'0', 0x01).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for non-printable ASCII, got {err:?}"
@@ -710,9 +710,9 @@ fn set_digit_leds_rejects_non_printable_ascii() {
 #[test]
 fn set_digit_leds_accepts_printable_ascii() {
     let mock = MockTransport::new();
-    let robot = Create::new(mock, CreateRobotModel::Create2);
-    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let create = Create::new(mock, RobotModel::Create2);
+    let mut create = create.start().unwrap().to_safe().unwrap();
 
     // All printable ASCII: space (32) through tilde (126)
-    robot.set_digit_leds(b'1', b'2', b'3', b'4').unwrap();
+    create.set_digit_leds(b'1', b'2', b'3', b'4').unwrap();
 }

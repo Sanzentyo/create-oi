@@ -19,20 +19,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     smol::block_on(async {
         println!("Opening {port} (smol stream)...");
-        let transport = SmolTransport::open(&port, CreateRobotModel::Create2)?;
+        let transport = SmolTransport::open(&port, RobotModel::Create2)?;
 
-        let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
-        let robot = robot.start().await.map_err(|e| e.source)?;
-        let mut robot = robot.to_safe().await.map_err(|e| e.source)?;
+        let create = AsyncCreate::new(transport, RobotModel::Create2);
+        let create = create.start().await.map_err(|e| e.source)?;
+        let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
         // Start sensor stream: bump/wheeldrop (7), voltage (22), OI mode (35)
-        robot.start_stream(&[7, 22, 35]).await?;
+        create.start_stream(&[7, 22, 35]).await?;
 
         const MAX_FRAMES: u32 = 20;
         let mut frames = 0u32;
 
         while frames < MAX_FRAMES {
-            robot
+            create
                 .poll_stream_with(|result| match result {
                     Ok(sd) => {
                         frames += 1;
@@ -50,9 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Pause stream, stop motors, return to passive
-        robot.toggle_stream(false).await?;
-        robot.stop().await?;
-        let _robot = robot.to_passive().await.map_err(|e| e.source)?;
+        create.toggle_stream(false).await?;
+        create.stop().await?;
+        let _create = create.to_passive().await.map_err(|e| e.source)?;
 
         println!("Stream complete ({frames} frames received).");
         Ok(())

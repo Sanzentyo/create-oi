@@ -18,7 +18,7 @@
 //!
 //! // `uart` is e.g. embassy_stm32::usart::Uart<'_, Async>
 //! let transport = EmbassyTransport::new(uart);
-//! let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
+//! let robot = AsyncCreate::new(transport, RobotModel::Create2);
 //! let robot = robot.start().await.unwrap();
 //! ```
 //!
@@ -31,7 +31,7 @@
 //! // split an Embassy UART into (rx, tx) halves
 //! let (rx, tx) = uart.split();
 //! let transport = EmbassySplitTransport::new(rx, tx);
-//! let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
+//! let robot = AsyncCreate::new(transport, RobotModel::Create2);
 //! let robot = robot.start().await.unwrap();
 //! ```
 //!

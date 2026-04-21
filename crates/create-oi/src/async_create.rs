@@ -1,4 +1,4 @@
-//! Asynchronous robot API with TypeState mode tracking.
+//! Asynchronous Create API with TypeState mode tracking.
 //!
 //! [`AsyncCreate<M, T>`] is the async counterpart to
 //! [`Create<M, T>`](crate::create::Create). It provides the same TypeState
@@ -17,8 +17,8 @@ use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::AsyncTransport;
 use crate::types::{
-    AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
-    MotorPower, OiMode, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
+    AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
+    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
 };
 use core::marker::PhantomData;
 use create_oi_protocol::command;
@@ -32,7 +32,7 @@ use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-/// An asynchronous robot handle, parameterised by OI mode `M` and transport `T`.
+/// An asynchronous Create handle, parameterised by OI mode `M` and transport `T`.
 ///
 /// Mode transitions consume `self` and return a new `AsyncCreate` in the target
 /// mode, ensuring the compiler enforces valid mode sequences.
@@ -46,7 +46,7 @@ use alloc::vec::Vec;
 #[derive(Debug)]
 pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
     transport: T,
-    model: CreateRobotModel,
+    model: RobotModel,
     stream_parser: StreamParser,
     /// `true` while a sensor stream is active (after `start_stream`, before `toggle_stream(false)`).
     streaming: bool,
@@ -60,7 +60,7 @@ pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
 impl<T: AsyncTransport> AsyncCreate<Off, T> {
     /// Create a new async robot handle wrapping the given transport.
     /// The robot is assumed to be in the `Off` state.
-    pub fn new(transport: T, model: CreateRobotModel) -> Self {
+    pub fn new(transport: T, model: RobotModel) -> Self {
         Self {
             transport,
             model,
@@ -94,7 +94,7 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     ) -> Result<AsyncCreate<Safe, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -108,7 +108,7 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     ) -> Result<AsyncCreate<Full, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -120,7 +120,7 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -135,7 +135,7 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     ) -> Result<AsyncCreate<Full, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -149,7 +149,7 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -161,7 +161,7 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
     pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -176,7 +176,7 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
     ) -> Result<AsyncCreate<Safe, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -190,7 +190,7 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
     ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -202,7 +202,7 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
     pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -428,7 +428,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         };
         if let Err(e) = self.send_cmd(&cmd).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -441,7 +441,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_dock()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -455,7 +455,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     pub async fn power_off(mut self) -> Result<T, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_power()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -469,7 +469,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     pub async fn reset(mut self) -> Result<T, TransitionError<Self, T::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_reset()).await {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -765,7 +765,7 @@ impl<M: FullControl, T: AsyncTransport> AsyncCreate<M, T> {
 impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     /// Get the robot model.
     #[must_use]
-    pub fn model(&self) -> CreateRobotModel {
+    pub fn model(&self) -> RobotModel {
         self.model
     }
 

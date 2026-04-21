@@ -1,4 +1,4 @@
-//! Synchronous robot API with TypeState mode tracking.
+//! Synchronous Create API with TypeState mode tracking.
 //!
 //! `Create<M, T>` wraps a [`Transport`](crate::transport::Transport) and
 //! encodes the current OI mode as a type parameter. Commands that require
@@ -11,15 +11,15 @@ use crate::error::{ConnectError, Error, TransitionError, ValidationError};
 use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, SensorReadable};
 use crate::transport::Transport;
 use crate::types::{
-    AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
-    MotorPower, OiMode, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
+    AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
+    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
 use std::marker::PhantomData;
 
-/// A synchronous robot handle, parameterised by OI mode `M` and transport `T`.
+/// A synchronous Create handle, parameterised by OI mode `M` and transport `T`.
 ///
 /// Mode transitions consume `self` and return a new `Create` in the target mode,
 /// ensuring the compiler enforces valid mode sequences.
@@ -33,7 +33,7 @@ use std::marker::PhantomData;
 #[derive(Debug)]
 pub struct Create<M: Mode, T: Transport> {
     transport: T,
-    model: CreateRobotModel,
+    model: RobotModel,
     stream_parser: StreamParser,
     /// `true` while a sensor stream is active (after `start_stream`, before `toggle_stream(false)`).
     streaming: bool,
@@ -47,7 +47,7 @@ pub struct Create<M: Mode, T: Transport> {
 impl<T: Transport> Create<Off, T> {
     /// Create a new robot handle wrapping the given transport.
     /// The robot is assumed to be in the `Off` state.
-    pub fn new(transport: T, model: CreateRobotModel) -> Self {
+    pub fn new(transport: T, model: RobotModel) -> Self {
         Self {
             transport,
             model,
@@ -79,7 +79,7 @@ impl<T: Transport> Create<Passive, T> {
     pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -91,7 +91,7 @@ impl<T: Transport> Create<Passive, T> {
     pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -106,7 +106,7 @@ impl<T: Transport> Create<Passive, T> {
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -119,7 +119,7 @@ impl<T: Transport> Create<Safe, T> {
     pub fn to_full(mut self) -> Result<Create<Full, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_full()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -133,7 +133,7 @@ impl<T: Transport> Create<Safe, T> {
     ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -145,7 +145,7 @@ impl<T: Transport> Create<Safe, T> {
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -158,7 +158,7 @@ impl<T: Transport> Create<Full, T> {
     pub fn to_safe(mut self) -> Result<Create<Safe, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_safe()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -172,7 +172,7 @@ impl<T: Transport> Create<Full, T> {
     ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_start()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -184,7 +184,7 @@ impl<T: Transport> Create<Full, T> {
     pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_stop()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -381,7 +381,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         };
         if let Err(e) = self.send_cmd(&cmd) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -394,7 +394,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_dock()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -408,7 +408,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     pub fn power_off(mut self) -> Result<T, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_power()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -422,7 +422,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     pub fn reset(mut self) -> Result<T, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_reset()) {
             return Err(TransitionError {
-                robot: self,
+                create: self,
                 source: e,
             });
         }
@@ -706,7 +706,7 @@ impl<M: FullControl, T: Transport> Create<M, T> {
 impl<M: Mode, T: Transport> Create<M, T> {
     /// Get the robot model.
     #[must_use]
-    pub fn model(&self) -> CreateRobotModel {
+    pub fn model(&self) -> RobotModel {
         self.model
     }
 

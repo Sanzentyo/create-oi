@@ -1,6 +1,6 @@
 //! dora-rs Create driver node example.
 //!
-//! This is a complete dora-rs node that drives an iRobot Create robot.
+//! This is a complete dora-rs node that drives an iRobot Create create.
 //! It polls sensors on a timer tick and accepts motor commands.
 //!
 //! ## Dataflow YAML
@@ -23,11 +23,11 @@ fn main() -> Result<()> {
     let port = std::env::var("CREATE_PORT").unwrap_or_else(|_| "/dev/ttyUSB0".into());
 
     eprintln!("[create_driver] Opening {port} for Create 2...");
-    let transport = SerialTransport::open(&port, CreateRobotModel::Create2)?;
+    let transport = SerialTransport::open(&port, RobotModel::Create2)?;
 
-    let robot = Create::new(transport, CreateRobotModel::Create2);
-    let robot = robot.start().map_err(|e| e.source)?;
-    let mut robot = robot.to_safe().map_err(|e| e.source)?;
+    let create = Create::new(transport, RobotModel::Create2);
+    let create = create.start().map_err(|e| e.source)?;
+    let mut create = create.to_safe().map_err(|e| e.source)?;
 
     eprintln!("[create_driver] Robot in Safe mode. Polling sensors...");
 
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     // For now, demonstrate the polling pattern:
     loop {
         // Query common sensors
-        let sd = robot.query_list(&[7, 8, 22, 24])?;
+        let sd = create.query_list(&[7, 8, 22, 24])?;
 
         eprintln!(
             "[sensors] bumps={:?} wall={:?} voltage={:?}mV temp={:?}°C",

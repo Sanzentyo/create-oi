@@ -28,12 +28,12 @@
 //! ```rust,ignore
 //! use create_oi::prelude::*;
 //! use create_oi_serial::SerialTransport;
-//! use create_oi::types::CreateRobotModel;
 //!
-//! let transport = SerialTransport::open("/dev/ttyUSB0", CreateRobotModel::Create2)?;
-//! let robot = Create::new(transport, CreateRobotModel::Create2);
-//! let robot = robot.start()?;          // Off → Passive
-//! let robot = robot.to_safe()?;        // Passive → Safe
+//!
+//! let transport = SerialTransport::open("/dev/ttyUSB0", RobotModel::Create2)?;
+//! let create = Create::new(transport, RobotModel::Create2);
+//! let create = create.start()?;          // Off → Passive
+//! let create = create.to_safe()?;        // Passive → Safe
 //! ```
 //!
 //! ## Quick Start (async / tokio)
@@ -41,16 +41,16 @@
 //! ```rust,ignore
 //! use create_oi::prelude::*;
 //! use create_oi_tokio::TokioTransport;
-//! use create_oi::types::CreateRobotModel;
 //!
-//! let transport = TokioTransport::open("/dev/ttyUSB0", CreateRobotModel::Create2)?;
-//! let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
-//! let robot = robot.start().await?;    // Off → Passive
-//! let robot = robot.to_safe().await?;  // Passive → Safe
+//!
+//! let transport = TokioTransport::open("/dev/ttyUSB0", RobotModel::Create2)?;
+//! let create = AsyncCreate::new(transport, RobotModel::Create2);
+//! let create = create.start().await?;    // Off → Passive
+//! let create = create.to_safe().await?;  // Passive → Safe
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
-// TransitionError/ConnectError intentionally store the robot/transport handle
+// TransitionError/ConnectError intentionally store the Create/transport handle
 // for recovery, making them large. This is by design.
 #![allow(clippy::result_large_err)]
 
@@ -78,8 +78,8 @@ pub mod prelude {
     #[cfg(feature = "std")]
     pub use crate::transport::Transport;
     pub use crate::types::{
-        AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity,
-        MotorBits, MotorPower, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
+        AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower,
+        PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports

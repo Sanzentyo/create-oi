@@ -36,7 +36,7 @@ const OI_MAX_PWM: i16 = 255;
 ///
 /// Create 2 supports 5 song slots (0–4). Create 1 / Roomba 400–500 supports
 /// 16 slots (0–15). This constant represents the maximum across all models;
-/// the control layer enforces the per-model limit via [`CreateRobotModel::max_song_number`].
+/// the control layer enforces the per-model limit via [`RobotModel::max_song_number`].
 const OI_MAX_SONG_NUMBER: u8 = 15;
 
 /// Conversion factor: meters → millimeters.
@@ -76,7 +76,7 @@ const MODE_CHANGE_DELAY_MS: u64 = 20;
 
 /// Physical robot model, determining protocol version and physical parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CreateRobotModel {
+pub enum RobotModel {
     /// Roomba 400 series and earlier (protocol V1).
     Roomba400,
     /// iRobot Create 1 / Roomba 500 series (protocol V2).
@@ -85,7 +85,7 @@ pub enum CreateRobotModel {
     Create2,
 }
 
-impl CreateRobotModel {
+impl RobotModel {
     /// Default baud rate for this model.
     #[inline(always)]
     pub const fn baud(self) -> u32 {
@@ -154,7 +154,7 @@ impl CreateRobotModel {
     }
 }
 
-impl core::fmt::Display for CreateRobotModel {
+impl core::fmt::Display for RobotModel {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Roomba400 => f.write_str("Roomba400"),
@@ -163,6 +163,10 @@ impl core::fmt::Display for CreateRobotModel {
         }
     }
 }
+
+/// Deprecated alias for [`RobotModel`].
+#[deprecated(since = "0.5.0", note = "renamed to `RobotModel`")]
+pub type CreateRobotModel = RobotModel;
 
 // ---------------------------------------------------------------------------
 // Validated newtypes
@@ -471,7 +475,7 @@ impl core::fmt::Display for LedIntensity {
 ///
 /// `SongNumber::new()` accepts the widest valid range (0–15). The control
 /// layer (`define_song`, `play_song`) further restricts this to the
-/// per-model maximum via [`CreateRobotModel::max_song_number`].
+/// per-model maximum via [`RobotModel::max_song_number`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SongNumber(u8);
 
@@ -773,9 +777,9 @@ mod tests {
 
     #[test]
     fn model_max_song_number() {
-        assert_eq!(CreateRobotModel::Create2.max_song_number(), 4);
-        assert_eq!(CreateRobotModel::Create1.max_song_number(), 15);
-        assert_eq!(CreateRobotModel::Roomba400.max_song_number(), 15);
+        assert_eq!(RobotModel::Create2.max_song_number(), 4);
+        assert_eq!(RobotModel::Create1.max_song_number(), 15);
+        assert_eq!(RobotModel::Roomba400.max_song_number(), 15);
     }
 
     #[test]
@@ -805,9 +809,9 @@ mod tests {
     }
 
     #[test]
-    fn robot_model_baud() {
-        assert_eq!(CreateRobotModel::Create2.baud(), 115_200);
-        assert_eq!(CreateRobotModel::Create1.baud(), 57_600);
+    fn model_baud() {
+        assert_eq!(RobotModel::Create2.baud(), 115_200);
+        assert_eq!(RobotModel::Create1.baud(), 57_600);
     }
 
     #[test]
@@ -950,10 +954,10 @@ mod tests {
     }
 
     #[test]
-    fn robot_model_display() {
-        assert_eq!(CreateRobotModel::Create2.to_string(), "Create2");
-        assert_eq!(CreateRobotModel::Create1.to_string(), "Create1");
-        assert_eq!(CreateRobotModel::Roomba400.to_string(), "Roomba400");
+    fn model_display() {
+        assert_eq!(RobotModel::Create2.to_string(), "Create2");
+        assert_eq!(RobotModel::Create1.to_string(), "Create1");
+        assert_eq!(RobotModel::Roomba400.to_string(), "Roomba400");
     }
 
     #[test]

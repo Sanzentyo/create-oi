@@ -1,4 +1,4 @@
-//! Tokio async transport for the robot.
+//! Tokio async transport for the Create/Roomba.
 //!
 //! Provides [`TokioTransport`], an [`AsyncTransport`] implementation
 //! for communicating with iRobot Create / Roomba robots via `tokio-serial`.
@@ -6,7 +6,7 @@
 use std::io;
 
 use create_oi::transport::AsyncTransport;
-use create_oi::types::CreateRobotModel;
+use create_oi::types::RobotModel;
 
 /// Re-export core types for convenience.
 pub use create_oi;
@@ -19,7 +19,7 @@ pub struct TokioTransport {
 
 impl TokioTransport {
     /// Open a serial port for the given model using tokio-serial.
-    pub fn open(path: &str, model: CreateRobotModel) -> io::Result<Self> {
+    pub fn open(path: &str, model: RobotModel) -> io::Result<Self> {
         let builder = tokio_serial::new(path, model.baud())
             .data_bits(tokio_serial::DataBits::Eight)
             .parity(tokio_serial::Parity::None)
