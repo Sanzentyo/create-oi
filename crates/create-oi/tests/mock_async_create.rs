@@ -1329,8 +1329,8 @@ async fn async_baud_sends_correct_bytes_and_calls_set_baud() {
     create.baud(BaudRate::Baud57600).await.unwrap();
 
     let written = create.transport().written_bytes();
-    // START (128) + BAUD (129) + baud_code (9)
-    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    // START (128) + BAUD (129) + baud_code (10)
+    assert_eq!(&written[written.len() - 2..], &[129, 10]);
     assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud57600));
 }
 
@@ -1526,5 +1526,101 @@ async fn async_set_scheduling_leds_accepts_valid_bits() {
     assert!(
         result.is_ok(),
         "should accept fully-set valid bits; got {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 15: BaudRate codes, set_leds Roomba 400 bit layout
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_baud_38400_sends_code_9() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+
+    create.baud(BaudRate::Baud38400).await.unwrap();
+
+    let written = create.transport().written_bytes();
+    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud38400));
+}
+
+#[tokio::test]
+async fn async_baud_57600_sends_code_10() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+
+    create.baud(BaudRate::Baud57600).await.unwrap();
+
+    let written = create.transport().written_bytes();
+    assert_eq!(&written[written.len() - 2..], &[129, 10]);
+}
+
+#[tokio::test]
+async fn async_set_leds_create2_uses_low_bits() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    // debris=true(bit0), spot=true(bit1) → 0b0000_0011 = 3
+    create
+        .set_leds(
+            true,
+            true,
+            false,
+            false,
+            PowerLedColor::GREEN,
+            LedIntensity::new(0),
+        )
+        .await
+        .unwrap();
+
+    let written = create.transport().written_bytes();
+    let last4 = &written[written.len() - 4..];
+    assert_eq!(last4[0], 139);
+    assert_eq!(last4[1], 0b0000_0011, "Create2: debris=bit0, spot=bit1");
+}
+
+#[tokio::test]
+async fn async_set_leds_roomba400_uses_high_bits() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Roomba400)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    // spot=true → bit6; check_robot=true → bit4 → 0b0101_0000 = 0x50
+    create
+        .set_leds(
+            false,
+            true,
+            false,
+            true,
+            PowerLedColor::GREEN,
+            LedIntensity::new(0),
+        )
+        .await
+        .unwrap();
+
+    let written = create.transport().written_bytes();
+    let last4 = &written[written.len() - 4..];
+    assert_eq!(last4[0], 139);
+    assert_eq!(
+        last4[1], 0b0101_0000,
+        "Roomba400: spot=bit6, check_robot=bit4"
     );
 }

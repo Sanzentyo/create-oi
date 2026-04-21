@@ -12,7 +12,7 @@ use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, Senso
 use crate::transport::{BaudConfigurable, Transport};
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
-    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
+    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity, led_bits,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
@@ -697,6 +697,15 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     }
 
     /// Set LEDs.
+    ///
+    /// The meaning of the boolean parameters is the same across all models, but
+    /// the underlying bit positions in the OI wire frame differ between Roomba 400
+    /// and Create 1/2:
+    ///
+    /// - **Create 1/2** (OI V2/V3): `debris=bit0`, `spot=bit1`, `dock=bit2`, `check_robot=bit3`
+    /// - **Roomba 400** (SCI V1): `debris=bit3`, `check_robot=bit4`, `dock=bit5`, `spot=bit6`
+    ///
+    /// This method handles the mapping automatically based on [`RobotModel`].
     pub fn set_leds(
         &mut self,
         debris: bool,
@@ -706,8 +715,7 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         color: PowerLedColor,
         intensity: LedIntensity,
     ) -> Result<(), Error<std::io::Error>> {
-        let bits =
-            (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3);
+        let bits = led_bits(self.model, debris, spot, dock, check_robot);
         self.send_cmd(&command::encode_leds(bits, color.get(), intensity.get()))
     }
 

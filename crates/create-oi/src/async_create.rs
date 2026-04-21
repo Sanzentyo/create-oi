@@ -18,7 +18,7 @@ use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, Senso
 use crate::transport::{AsyncBaudConfigurable, AsyncTransport};
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower, OiMode,
-    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
+    PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity, led_bits,
 };
 use core::marker::PhantomData;
 use core::time::Duration;
@@ -841,8 +841,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         color: PowerLedColor,
         intensity: LedIntensity,
     ) -> Result<(), Error<T::Error>> {
-        let bits =
-            (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3);
+        let bits = led_bits(self.model, debris, spot, dock, check_robot);
         self.send_cmd(&command::encode_leds(bits, color.get(), intensity.get()))
             .await
     }

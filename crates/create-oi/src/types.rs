@@ -20,8 +20,12 @@ const OI_MAX_VELOCITY_MM_S: i16 = 500;
 /// Maximum turn radius: ±2000 mm (OI spec §5.5).
 const OI_MAX_RADIUS_MM: i16 = 2000;
 
-/// OI special radius value: drive straight (0x7FFF, OI spec §5.5).
-const OI_RADIUS_STRAIGHT_RAW: i16 = 0x7FFF;
+/// OI special radius value: drive straight (0x8000 = i16::MIN, OI spec §5.5).
+///
+/// The OI spec lists 32768 (bytes `[0x80, 0x00]`) as the primary sentinel for
+/// "straight"; 32767 (`0x7FFF`) is listed as an accepted alias. Using `i16::MIN`
+/// (-32768) produces the canonical wire encoding `[0x80, 0x00]`.
+const OI_RADIUS_STRAIGHT_RAW: i16 = i16::MIN;
 
 /// OI special radius value: turn in place clockwise (-1, OI spec §5.5).
 const OI_RADIUS_TURN_CW_RAW: i16 = -1;
@@ -232,6 +236,40 @@ impl core::fmt::Display for RobotModel {
 }
 
 // ---------------------------------------------------------------------------
+// LED bit-packing helper
+// ---------------------------------------------------------------------------
+
+/// Compute the LED-bits byte for the OI `LEDS` command (opcode 139).
+///
+/// The bit layout differs between Roomba 400 (SCI V1) and Create 1/2 (OI V2/V3):
+///
+/// | Parameter    | Create 1/2 bit | Roomba 400 bit |
+/// |---|---|---|
+/// | `debris`     | 0              | 3              |
+/// | `spot`       | 1              | 6              |
+/// | `dock`       | 2              | 5              |
+/// | `check_robot`| 3              | 4              |
+#[inline(always)]
+pub(crate) const fn led_bits(
+    model: RobotModel,
+    debris: bool,
+    spot: bool,
+    dock: bool,
+    check_robot: bool,
+) -> u8 {
+    if matches!(model, RobotModel::Roomba400) {
+        // Roomba 400 SCI: dirt_detect=3, check_robot=4, dock=5, spot=6
+        ((debris as u8) << 3)
+            | ((check_robot as u8) << 4)
+            | ((dock as u8) << 5)
+            | ((spot as u8) << 6)
+    } else {
+        // Create 1/2 OI: debris=0, spot=1, dock=2, check_robot=3
+        (debris as u8) | ((spot as u8) << 1) | ((dock as u8) << 2) | ((check_robot as u8) << 3)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Validated newtypes
 // ---------------------------------------------------------------------------
 
@@ -340,7 +378,7 @@ impl CurveRadius {
 ///
 /// # Protocol details (OI spec §5.5)
 ///
-/// - `0x7FFF` (32767): drive straight
+/// - `i16::MIN` (bytes `[0x80, 0x00]`): drive straight (primary sentinel; `32767` is also accepted)
 /// - `-1`: turn in place clockwise
 /// - `1`: turn in place counter-clockwise
 /// - `-2000..2000` mm: arc radius (positive = left, negative = right)
@@ -385,14 +423,13 @@ impl Radius {
                 reason: "value rounds to 0 mm which is not a valid OI arc radius; choose a value whose absolute magnitude is at least 0.002 m",
             });
         }
-        // Reject raw values that collide with protocol specials (-1, 1, 32767)
-        if raw_mm == OI_RADIUS_TURN_CW_RAW
-            || raw_mm == OI_RADIUS_TURN_CCW_RAW
-            || raw_mm == OI_RADIUS_STRAIGHT_RAW
-        {
+        // Reject raw values that collide with turn-in-place specials (-1, +1).
+        // The straight sentinel (i16::MIN = -32768) is already outside ±2000 mm
+        // and is rejected by validate_range above.
+        if raw_mm == OI_RADIUS_TURN_CW_RAW || raw_mm == OI_RADIUS_TURN_CCW_RAW {
             return Err(ValidationError {
                 field: "Radius",
-                reason: "value rounds to a reserved OI special encoding; use Radius::Straight/TurnInPlaceCw/TurnInPlaceCcw",
+                reason: "value rounds to a reserved OI special encoding; use Radius::TurnInPlaceCw/TurnInPlaceCcw",
             });
         }
         Ok(Self::Curve(CurveRadius(value)))
@@ -801,8 +838,11 @@ mod tests {
 
     #[test]
     fn radius_straight_encodes_correctly() {
-        assert_eq!(Radius::Straight.to_mm(), 0x7FFF);
-        assert_eq!(Radius::STRAIGHT.to_mm(), 32767);
+        assert_eq!(Radius::Straight.to_mm(), i16::MIN);
+        assert_eq!(Radius::STRAIGHT.to_mm(), i16::MIN);
+        // Wire encoding must be [0x80, 0x00] — the canonical OI straight sentinel.
+        let bytes = Radius::Straight.to_mm().to_be_bytes();
+        assert_eq!(bytes, [0x80, 0x00]);
     }
 
     #[test]

@@ -1338,8 +1338,8 @@ fn baud_sends_correct_bytes_and_calls_set_baud() {
     create.baud(BaudRate::Baud57600).unwrap();
 
     let written = create.transport().written_bytes();
-    // START (128) + BAUD (129) + baud_code (9)
-    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    // START (128) + BAUD (129) + baud_code (10)
+    assert_eq!(&written[written.len() - 2..], &[129, 10]);
     assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud57600));
 }
 
@@ -1391,17 +1391,18 @@ fn baud_rate_baud_u32_all_codes() {
     assert_eq!(BaudRate::Baud14400.baud_u32(), 14400);
     assert_eq!(BaudRate::Baud19200.baud_u32(), 19200);
     assert_eq!(BaudRate::Baud28800.baud_u32(), 28800);
+    assert_eq!(BaudRate::Baud38400.baud_u32(), 38400);
     assert_eq!(BaudRate::Baud57600.baud_u32(), 57600);
     assert_eq!(BaudRate::Baud115200.baud_u32(), 115200);
 }
 
 #[test]
 fn baud_rate_from_code_round_trip() {
-    for code in 0u8..=10 {
+    for code in 0u8..=11 {
         let rate = BaudRate::from_code(code).expect("valid code");
         assert_eq!(rate as u8, code);
     }
-    assert!(BaudRate::from_code(11).is_none());
+    assert!(BaudRate::from_code(12).is_none());
     assert!(BaudRate::from_code(255).is_none());
 }
 
@@ -1574,13 +1575,16 @@ fn drive_direct_rejected_on_roomba400() {
         .unwrap()
         .to_safe()
         .unwrap();
-    let result = robot.drive_direct(
-        Velocity::new(0.1).unwrap(),
-        Velocity::new(0.1).unwrap(),
+    let result = robot.drive_direct(Velocity::new(0.1).unwrap(), Velocity::new(0.1).unwrap());
+    assert!(
+        result.is_err(),
+        "drive_direct must be rejected on Roomba 400"
     );
-    assert!(result.is_err(), "drive_direct must be rejected on Roomba 400");
     let err_msg = format!("{:?}", result.unwrap_err());
-    assert!(err_msg.contains("model"), "error should name the model field");
+    assert!(
+        err_msg.contains("model"),
+        "error should name the model field"
+    );
 }
 
 #[test]
@@ -1595,7 +1599,10 @@ fn drive_twist_rejected_on_roomba400() {
         Velocity::new(0.1).unwrap(),
         AngularVelocity::new(0.0).unwrap(),
     );
-    assert!(result.is_err(), "drive_twist must be rejected on Roomba 400");
+    assert!(
+        result.is_err(),
+        "drive_twist must be rejected on Roomba 400"
+    );
 }
 
 #[test]
@@ -1632,7 +1639,10 @@ fn clean_max_rejected_on_create1_from_passive() {
     let mock = MockTransport::new();
     let create = Create::new(mock, RobotModel::Create1).start().unwrap();
     let result = create.clean(CleanMode::Max);
-    assert!(result.is_err(), "CleanMode::Max must be rejected on Create 1");
+    assert!(
+        result.is_err(),
+        "CleanMode::Max must be rejected on Create 1"
+    );
     let err_msg = format!("{:?}", result.unwrap_err());
     assert!(err_msg.contains("mode"), "error should name the mode field");
 }
@@ -1646,7 +1656,10 @@ fn clean_max_rejected_on_create1_from_safe() {
         .to_safe()
         .unwrap();
     let result = create.clean(CleanMode::Max);
-    assert!(result.is_err(), "CleanMode::Max must be rejected on Create 1");
+    assert!(
+        result.is_err(),
+        "CleanMode::Max must be rejected on Create 1"
+    );
 }
 
 #[test]
@@ -1654,7 +1667,10 @@ fn clean_max_accepted_on_create2() {
     let mock = MockTransport::new();
     let create = Create::new(mock, RobotModel::Create2).start().unwrap();
     let result = create.clean(CleanMode::Max);
-    assert!(result.is_ok(), "CleanMode::Max must be accepted on Create 2");
+    assert!(
+        result.is_ok(),
+        "CleanMode::Max must be accepted on Create 2"
+    );
 }
 
 #[test]
@@ -1668,7 +1684,10 @@ fn query_list_rejected_on_roomba400() {
     let result = robot.query_list(&[0]);
     assert!(result.is_err(), "query_list must be rejected on Roomba 400");
     let err_msg = format!("{:?}", result.unwrap_err());
-    assert!(err_msg.contains("model"), "error should name the model field");
+    assert!(
+        err_msg.contains("model"),
+        "error should name the model field"
+    );
 }
 
 #[test]
@@ -1682,7 +1701,10 @@ fn query_sensor_individual_packet_rejected_on_roomba400() {
         .unwrap();
     // Packet 7 is the first individual packet (bump/wheel drop, 1 byte).
     let result = robot.query_sensor_raw(7);
-    assert!(result.is_err(), "individual sensor packets must be rejected on Roomba 400");
+    assert!(
+        result.is_err(),
+        "individual sensor packets must be rejected on Roomba 400"
+    );
 }
 
 #[test]
@@ -1722,5 +1744,133 @@ fn query_sensor_group_0_accepted_on_roomba400() {
         .to_safe()
         .unwrap();
     let result = robot.query_sensor_raw(0);
-    assert!(result.is_ok(), "group 0 must be accepted on Roomba 400; got {result:?}");
+    assert!(
+        result.is_ok(),
+        "group 0 must be accepted on Roomba 400; got {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 15: BaudRate codes, straight sentinel, set_leds Roomba 400 bit layout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn baud_38400_sends_code_9() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+
+    create.baud(BaudRate::Baud38400).unwrap();
+
+    let written = create.transport().written_bytes();
+    assert_eq!(&written[written.len() - 2..], &[129, 9]);
+    assert_eq!(create.transport().last_set_baud, Some(BaudRate::Baud38400));
+}
+
+#[test]
+fn baud_57600_sends_code_10() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+
+    create.baud(BaudRate::Baud57600).unwrap();
+
+    let written = create.transport().written_bytes();
+    assert_eq!(&written[written.len() - 2..], &[129, 10]);
+}
+
+#[test]
+fn baud_115200_sends_code_11() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+
+    create.baud(BaudRate::Baud115200).unwrap();
+
+    let written = create.transport().written_bytes();
+    assert_eq!(&written[written.len() - 2..], &[129, 11]);
+}
+
+#[test]
+fn set_leds_create2_uses_low_bits() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    // debris=true(bit0), spot=true(bit1), dock=false, check_robot=false → 0b0000_0011 = 3
+    create
+        .set_leds(
+            true,
+            true,
+            false,
+            false,
+            PowerLedColor::GREEN,
+            LedIntensity::new(128),
+        )
+        .unwrap();
+
+    let written = create.transport().written_bytes();
+    // LEDS (139) + led_bits (3) + color (0) + intensity (128)
+    let last4 = &written[written.len() - 4..];
+    assert_eq!(last4[0], 139);
+    assert_eq!(last4[1], 0b0000_0011, "Create2: debris=bit0, spot=bit1");
+}
+
+#[test]
+fn set_leds_roomba400_uses_high_bits() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    // spot=true → bit6; check_robot=true → bit4
+    // → 0b0101_0000 = 0x50
+    create
+        .set_leds(
+            false,
+            true,
+            false,
+            true,
+            PowerLedColor::GREEN,
+            LedIntensity::new(0),
+        )
+        .unwrap();
+
+    let written = create.transport().written_bytes();
+    let last4 = &written[written.len() - 4..];
+    assert_eq!(last4[0], 139);
+    assert_eq!(
+        last4[1], 0b0101_0000,
+        "Roomba400: spot=bit6, check_robot=bit4"
+    );
+}
+
+#[test]
+fn set_leds_roomba400_debris_dock_bits() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    // debris=true → bit3; dock=true → bit5
+    // → 0b0010_1000 = 0x28
+    create
+        .set_leds(
+            true,
+            false,
+            true,
+            false,
+            PowerLedColor::GREEN,
+            LedIntensity::new(0),
+        )
+        .unwrap();
+
+    let written = create.transport().written_bytes();
+    let last4 = &written[written.len() - 4..];
+    assert_eq!(last4[0], 139);
+    assert_eq!(last4[1], 0b0010_1000, "Roomba400: debris=bit3, dock=bit5");
 }

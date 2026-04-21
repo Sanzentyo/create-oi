@@ -14,7 +14,10 @@ use core::fmt;
 /// The host must wait 100 ms and then reconfigure its serial connection
 /// to the same rate before sending further commands.
 ///
-/// The default rate is 115200 for Create 2 and 57600 for Create 1.
+/// The default rate is 115200 for Create 2 and 57600 for Create 1 / Roomba 400.
+///
+/// The baud code table is the same for all robot models (OI spec Table 3):
+/// codes 0–11 map to 300–115200 bps inclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BaudRate {
@@ -36,10 +39,12 @@ pub enum BaudRate {
     Baud19200 = 7,
     /// 28800 bps
     Baud28800 = 8,
-    /// 57600 bps — default for Create 1
-    Baud57600 = 9,
+    /// 38400 bps
+    Baud38400 = 9,
+    /// 57600 bps — default for Create 1 / Roomba 400
+    Baud57600 = 10,
     /// 115200 bps — default for Create 2
-    Baud115200 = 10,
+    Baud115200 = 11,
 }
 
 impl BaudRate {
@@ -56,12 +61,13 @@ impl BaudRate {
             Self::Baud14400 => 14400,
             Self::Baud19200 => 19200,
             Self::Baud28800 => 28800,
+            Self::Baud38400 => 38400,
             Self::Baud57600 => 57600,
             Self::Baud115200 => 115200,
         }
     }
 
-    /// Decode a baud code byte. Returns `None` for values outside 0-10.
+    /// Decode a baud code byte. Returns `None` for values outside 0–11.
     #[inline(always)]
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
@@ -74,8 +80,9 @@ impl BaudRate {
             6 => Some(Self::Baud14400),
             7 => Some(Self::Baud19200),
             8 => Some(Self::Baud28800),
-            9 => Some(Self::Baud57600),
-            10 => Some(Self::Baud115200),
+            9 => Some(Self::Baud38400),
+            10 => Some(Self::Baud57600),
+            11 => Some(Self::Baud115200),
             _ => None,
         }
     }

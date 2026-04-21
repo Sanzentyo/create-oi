@@ -449,3 +449,60 @@ in Off mode.
 - Async integration: same set (9)
 - Updated: `poll_stream_eof_returns_protocol_error` (sync + async) to call `start_stream` first
 - Updated: `start_stream_rejects_group_packet_id_before_send` → `start_stream_accepts_group_packet_id` (behavior change)
+
+---
+
+## Round 15: OI Spec Compliance Guards (Two-Agent Parallel Audit + Cross-Review)
+
+**Process:** Dual parallel audit — spec-researcher (general-purpose agent) researched OI spec differences per model against primary sources (Roomba 400 SCI v1, Create 1 OI v2, Create 2 OI v3), and rubber-duck (duck-round15) performed an independent library audit. Results were cross-reviewed for conflicts and new findings.
+
+**Part A (spec-researcher commit 45703ca):** Model-specific OI compliance guards
+
+1. **High: `to_safe()` Passive→Safe wrong opcode for Roomba 400**
+   - Roomba 400 SCI: Passive→Safe requires opcode 130 (CONTROL), not 131 (SAFE)
+   - `Create<Passive, T>::to_safe()` now sends CONTROL for Roomba400, SAFE for Create1/2
+   - Both sync and async updated
+
+2. **High: `CleanMode::Max` sends Demo opcode on Create 1**
+   - Opcode 136 = "Demo" (runs built-in demos) on Create 1; = "Max" on Roomba400/Create2
+   - `clean(CleanMode::Max)` now returns `ValidationError` for Create1
+
+3. **High: `drive_direct()` / `drive_twist()` not guarded for Roomba 400**
+   - Opcode 145 (DRIVE_DIRECT) does not exist in Roomba 400 SCI
+   - Both reject `Roomba400` with `ValidationError`
+
+4. **High: `stop()` uses DRIVE_DIRECT (opcode 145) on Roomba 400**
+   - Roomba 400: `stop()` now uses DRIVE (137) with 0x8000 straight sentinel (v=0, straight)
+   - Create 1/2: unchanged (still uses DRIVE_DIRECT)
+
+5. **High: `query_list()` not guarded for Roomba 400**
+   - Opcode 149 (QUERY_LIST) not in Roomba 400 SCI
+   - Returns `ValidationError` for Roomba400
+
+6. **High: Sensor packet IDs not model-filtered**
+   - Packets 43–58 are Create 2-only; groups 4–6 not in Roomba 400; group 100 not in Create 1/Roomba400
+   - Added `RobotModel` helpers: `supports_individual_sensor_packets()`, `max_individual_sensor_packet_id()`, `supports_query_list()`, `supports_group_packet()`
+   - All query/stream methods validate against model capability
+
+**Part B (Round 15 continuation):** Wire encoding bugs found via cross-review
+
+7. **High: `BaudRate` codes 9–11 wrong for all models**
+   - OI spec Table 3 has 12 codes (0–11): code 9=38400, 10=57600, 11=115200
+   - Old code had 11 entries (0–10) with 9=57600, 10=115200 — missing 38400, wrong codes for 57600/115200
+   - Added `BaudRate::Baud38400`, updated `Baud57600` to code 10, `Baud115200` to code 11
+
+8. **Medium: Straight-driving sentinel canonicalized to i16::MIN (0x8000)**
+   - OI spec lists `32768` (bytes `[0x80, 0x00]`) as primary sentinel for "straight"; 32767 (0x7FFF) is an alias
+   - Changed `OI_RADIUS_STRAIGHT_RAW` from `0x7FFF` to `i16::MIN` for canonical wire encoding
+   - `stop()` on Roomba400 was already using `i16::MIN`; `Radius::Straight` now also uses it
+
+9. **Medium: `set_leds()` used wrong bit layout for Roomba 400**
+   - Roomba 400 SCI LEDS byte: debris=bit3, check_robot=bit4, dock=bit5, spot=bit6
+   - Create 1/2 LEDS byte: debris=bit0, spot=bit1, dock=bit2, check_robot=bit3
+   - Added `pub(crate) fn led_bits(model, ...)` helper in `types.rs`; both sync and async `set_leds()` dispatch to it
+
+**Tests:** 301 total (was 291 → +10 new tests)
+- Baud code correctness: Baud38400 sends code 9, Baud57600 sends code 10, Baud115200 sends code 11 (sync + async)
+- LED bit layout: Create2 uses low bits (0–3), Roomba400 uses high bits (3–6) (sync + async)
+- Straight sentinel: Radius::Straight encodes to i16::MIN (bytes [0x80, 0x00])
+- Updated baud round-trip test: from_code now covers 0–11
