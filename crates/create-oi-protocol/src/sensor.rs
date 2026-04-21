@@ -6,7 +6,7 @@
 use crate::error::ProtocolError;
 use crate::types::{ChargingState, IrChar, OiMode};
 
-use crate::opcode::packet_info;
+use crate::opcode::{group_data_len, group_packet_ids, packet_info};
 
 // ---------------------------------------------------------------------------
 // Raw sensor value decoding
@@ -174,11 +174,22 @@ impl SensorData {
 
     /// Decode a sequence of packets (e.g., from a query list response).
     /// `ids` is the ordered list of packet IDs. `data` is the concatenated bytes.
+    ///
+    /// Group packet IDs (0-6, 100) are expanded to their constituent individual
+    /// packet IDs before decoding; the robot always returns individual packet data
+    /// in the same order.
     pub fn decode_packets(&mut self, ids: &[u8], data: &[u8]) -> Result<(), ProtocolError> {
         let mut offset = 0;
         for &id in ids {
-            let consumed = self.decode_packet(id, &data[offset..])?;
-            offset += consumed;
+            if let Some(members) = group_packet_ids(id) {
+                for &mid in members {
+                    let consumed = self.decode_packet(mid, &data[offset..])?;
+                    offset += consumed;
+                }
+            } else {
+                let consumed = self.decode_packet(id, &data[offset..])?;
+                offset += consumed;
+            }
         }
         if offset != data.len() {
             return Err(ProtocolError::UnexpectedData {
@@ -519,17 +530,40 @@ impl SensorData {
 }
 
 /// Compute the expected total data length for a list of packet IDs.
+/// Total expected response length (bytes) for the given list of packet IDs.
+///
+/// Both individual packet IDs (7-58) and group packet IDs (0-6, 100) are
+/// accepted; group IDs are expanded to their constituent packets.
 pub const fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
     let mut total = 0usize;
     let mut i = 0;
     while i < ids.len() {
         match packet_info(ids[i]) {
             Some(p) => total += p.len as usize,
-            None => return Err(ProtocolError::UnknownPacketId(ids[i])),
+            None => match group_data_len(ids[i]) {
+                Some(len) => total += len,
+                None => return Err(ProtocolError::UnknownPacketId(ids[i])),
+            },
         }
         i += 1;
     }
     Ok(total)
+}
+
+/// Returns `true` if `ids` contains any duplicate packet ID.
+///
+/// Uses a 256-bit stack bitset — no allocation required.
+pub fn has_duplicate_ids(ids: &[u8]) -> bool {
+    let mut seen = [0u8; 32];
+    for &id in ids {
+        let bit = 1u8 << (id & 7);
+        let byte = (id >> 3) as usize;
+        if seen[byte] & bit != 0 {
+            return true;
+        }
+        seen[byte] |= bit;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -691,5 +725,71 @@ mod tests {
         let mut sd = SensorData::default();
         sd.decode_packet(58, &[0x01]).unwrap();
         assert_eq!(sd.is_stasis_detected(), Some(true));
+    }
+
+    // Round 14: has_duplicate_ids tests
+    #[test]
+    fn has_duplicate_ids_empty() {
+        assert!(!has_duplicate_ids(&[]), "empty slice has no duplicates");
+    }
+
+    #[test]
+    fn has_duplicate_ids_no_dups() {
+        assert!(
+            !has_duplicate_ids(&[7, 8, 22, 19]),
+            "distinct IDs have no duplicates"
+        );
+    }
+
+    #[test]
+    fn has_duplicate_ids_adjacent_dup() {
+        assert!(has_duplicate_ids(&[7, 7]), "adjacent duplicate detected");
+    }
+
+    #[test]
+    fn has_duplicate_ids_non_adjacent_dup() {
+        assert!(
+            has_duplicate_ids(&[7, 8, 22, 7]),
+            "non-adjacent duplicate detected"
+        );
+    }
+
+    #[test]
+    fn has_duplicate_ids_group_ids_not_same_as_individuals() {
+        // Group ID 0 is different from individual IDs 7-26; not a duplicate
+        assert!(
+            !has_duplicate_ids(&[0, 7, 8]),
+            "group ID 0 is not the same as ID 7 or 8"
+        );
+    }
+
+    // Round 14: expected_data_len with group IDs
+    #[test]
+    fn expected_data_len_group_0() {
+        // Group 0 = packets 7-26; total = sum of their individual lengths
+        let len = expected_data_len(&[0]).unwrap();
+        // Validate it's non-zero and matches group_data_len
+        assert_eq!(Some(len), group_data_len(0));
+    }
+
+    #[test]
+    fn expected_data_len_group_100() {
+        let len = expected_data_len(&[100]).unwrap();
+        assert_eq!(Some(len), group_data_len(100));
+    }
+
+    #[test]
+    fn expected_data_len_mixed_individual_and_group() {
+        // Mix a group ID with an individual packet
+        let group_len = group_data_len(6).unwrap();
+        let individual_len = packet_info(8).unwrap().len as usize;
+        let total = expected_data_len(&[6, 8]).unwrap();
+        assert_eq!(total, group_len + individual_len);
+    }
+
+    #[test]
+    fn expected_data_len_unknown_id_fails() {
+        let result = expected_data_len(&[200]);
+        assert!(result.is_err(), "unknown ID 200 should return Err");
     }
 }

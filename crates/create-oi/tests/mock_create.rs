@@ -492,6 +492,8 @@ fn poll_stream_eof_returns_protocol_error() {
     let create = Create::new(mock, RobotModel::Create2);
     let mut create = create.start().unwrap();
 
+    // Must start a stream before poll_stream is callable
+    create.start_stream(&[8]).unwrap(); // write succeeds even with eof_on_read
     let err = create.poll_stream().unwrap_err();
     assert!(
         matches!(
@@ -1093,7 +1095,7 @@ fn start_stream_rejects_unknown_packet_id_before_send() {
 }
 
 #[test]
-fn start_stream_rejects_group_packet_id_before_send() {
+fn start_stream_accepts_group_packet_id() {
     let transport = MockTransport::new();
     let mut robot = Create::new(transport, RobotModel::Create2)
         .start()
@@ -1101,13 +1103,15 @@ fn start_stream_rejects_group_packet_id_before_send() {
         .to_safe()
         .unwrap();
 
-    let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.start_stream(&[0]); // group packet 0 is not supported
-    assert!(result.is_err(), "should reject group packet ID 0");
-    let written_after = robot.transport().written_bytes().to_vec();
-    assert_eq!(
-        written_before, written_after,
-        "no bytes should be sent when a group ID is present"
+    // Group 0 covers packets 7-26; payload fits within 255 bytes
+    let result = robot.start_stream(&[0]);
+    assert!(
+        result.is_ok(),
+        "group packet ID 0 should be accepted; got {result:?}"
+    );
+    assert!(
+        robot.transport().written_bytes().contains(&148),
+        "STREAM opcode 148 should be sent"
     );
 }
 
@@ -1399,4 +1403,141 @@ fn baud_rate_from_code_round_trip() {
     }
     assert!(BaudRate::from_code(11).is_none());
     assert!(BaudRate::from_code(255).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Round 14: duplicate IDs, poll_stream guard, scheduling_leds reserved bits
+// ---------------------------------------------------------------------------
+
+#[test]
+fn start_stream_rejects_duplicate_ids() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.start_stream(&[8, 22, 8]); // duplicate packet 8
+    assert!(result.is_err(), "should reject duplicate packet IDs");
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes sent when duplicates detected"
+    );
+}
+
+#[test]
+fn query_list_rejects_duplicate_ids() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let written_before = robot.transport().written_bytes().to_vec();
+    let result = robot.query_list(&[7, 8, 7]); // duplicate packet 7
+    assert!(
+        result.is_err(),
+        "should reject duplicate packet IDs in query_list"
+    );
+    let written_after = robot.transport().written_bytes().to_vec();
+    assert_eq!(
+        written_before, written_after,
+        "no bytes sent when duplicates detected"
+    );
+}
+
+#[test]
+fn poll_stream_rejects_when_not_streaming() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.poll_stream();
+    assert!(
+        result.is_err(),
+        "poll_stream should fail when not streaming"
+    );
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(
+        err_msg.contains("start_stream"),
+        "error message should mention start_stream(); got {err_msg}"
+    );
+}
+
+#[test]
+fn poll_stream_with_rejects_when_not_streaming() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.poll_stream_with(|_| {});
+    assert!(
+        result.is_err(),
+        "poll_stream_with should fail when not streaming"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_rejects_reserved_day_leds_bit7() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x80, 0x00); // bit 7 of day_leds set
+    assert!(result.is_err(), "should reject reserved bit 7 in day_leds");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(
+        err_msg.contains("day_leds"),
+        "error should name the day_leds field"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_rejects_reserved_schedule_leds_upper_nibble() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7F, 0xF0); // upper 4 bits of schedule_leds set
+    assert!(
+        result.is_err(),
+        "should reject reserved upper bits in schedule_leds"
+    );
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(
+        err_msg.contains("schedule_leds"),
+        "error should name the schedule_leds field"
+    );
+}
+
+#[test]
+fn set_scheduling_leds_accepts_valid_bits() {
+    let transport = MockTransport::new();
+    let mut robot = Create::new(transport, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = robot.set_scheduling_leds(0x7F, 0x0F); // all valid bits
+    assert!(
+        result.is_ok(),
+        "should accept fully-set valid bits; got {result:?}"
+    );
 }

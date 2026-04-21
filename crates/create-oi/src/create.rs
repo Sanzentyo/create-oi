@@ -343,13 +343,13 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query a single sensor packet and decode it.
     ///
     /// Group packet IDs (0-6, 100) are not supported by this typed decode API;
-    /// use `query_sensor_raw()` to receive raw bytes for group packets.
+    /// use `query_sensor_raw_into()` to receive raw bytes for group packets.
     #[must_use = "query result must be used"]
     pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<std::io::Error>> {
         if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
             return Err(Error::Validation(ValidationError {
                 field: "packet_id",
-                reason: "group packet IDs (0-6, 100) are not decoded by query_sensor(); use query_sensor_raw() instead",
+                reason: "group packet IDs (0-6, 100) are not decoded by query_sensor(); use query_sensor_raw_into() instead",
             }));
         }
         let raw = self.query_sensor_raw(packet_id)?;
@@ -361,10 +361,20 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query multiple sensors at once and decode all of them.
     ///
     /// Validates all packet IDs before sending any bytes to the robot.
-    /// Returns `ValidationError` if a sensor stream is currently active.
+    /// Returns `ValidationError` if a sensor stream is currently active or
+    /// if the list contains duplicate packet IDs.
+    ///
+    /// Group packet IDs (0-6, 100) are accepted; the robot expands them and
+    /// returns the constituent individual packets, which are then decoded.
     #[must_use = "query result must be used"]
     pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<std::io::Error>> {
         self.reject_if_streaming()?;
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in query_list",
+            }));
+        }
         let expected_len = sensor::expected_data_len(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)?;
@@ -389,8 +399,12 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Start streaming the given packet IDs.
     ///
     /// Returns an error if this robot model does not support sensor streaming,
-    /// if the packet ID list exceeds the protocol limit, or if the total
-    /// stream payload per cycle would exceed 255 bytes.
+    /// if the packet ID list exceeds the protocol limit, if the total stream
+    /// payload per cycle would exceed 255 bytes, or if the list contains
+    /// duplicate packet IDs.
+    ///
+    /// Group packet IDs (0-6, 100) are accepted; the per-cycle payload is
+    /// computed as if each group were expanded to its constituent packets.
     ///
     /// Sets the internal streaming flag; while streaming, sensor query methods
     /// (`query_sensor_raw`, `query_sensor_raw_into`, `query_list`) return
@@ -402,13 +416,25 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in start_stream",
+            }));
+        }
         let payload_bytes = packet_ids.iter().try_fold(
             0usize,
             |acc, &id| -> Result<usize, Error<std::io::Error>> {
-                let info = create_oi_protocol::opcode::packet_info(id).ok_or(Error::Protocol(
-                    create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
-                ))?;
-                Ok(acc + 1 + info.len as usize)
+                if let Some(info) = create_oi_protocol::opcode::packet_info(id) {
+                    Ok(acc + 1 + info.len as usize)
+                } else if let Some(members) = create_oi_protocol::opcode::group_packet_ids(id) {
+                    let data_len = create_oi_protocol::opcode::group_data_len(id).unwrap_or(0);
+                    Ok(acc + members.len() + data_len)
+                } else {
+                    Err(Error::Protocol(
+                        create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                    ))
+                }
             },
         )?;
         if payload_bytes > 255 {
@@ -440,7 +466,11 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Read bytes from the transport and try to parse stream frames.
+    ///
+    /// Returns `ValidationError` if no stream is currently active (call
+    /// `start_stream()` first).
     pub fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error<std::io::Error>> {
+        self.reject_if_not_streaming()?;
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
@@ -458,10 +488,12 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Read bytes from the transport and parse stream frames via callback.
     ///
     /// This is the no-alloc equivalent of [`poll_stream`](Self::poll_stream).
+    /// Returns `ValidationError` if no stream is currently active.
     pub fn poll_stream_with(
         &mut self,
         callback: impl FnMut(Result<SensorData, create_oi_protocol::error::ProtocolError>),
     ) -> Result<(), Error<std::io::Error>> {
+        self.reject_if_not_streaming()?;
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
@@ -724,12 +756,12 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
 
     /// Set the scheduling LED indicators (opcode 162).
     ///
-    /// - `day_leds`: bitmask for day-of-week LEDs; bits 0–6 = Sun–Sat.
+    /// - `day_leds`: bitmask for day-of-week LEDs; bits 0–6 = Sun–Sat. Bit 7 is reserved.
     /// - `schedule_leds`: bitmask for status icons; bit 0=colon, bit 1=AM/PM,
-    ///   bit 2=clock icon, bit 3=schedule icon.
+    ///   bit 2=clock icon, bit 3=schedule icon. Upper 4 bits are reserved.
     ///
     /// Returns `ValidationError` if this model is not Create 2 (OPCODE 162 is
-    /// not supported on Create 1 or Roomba 400).
+    /// not supported on Create 1 or Roomba 400), or if reserved bits are set.
     pub fn set_scheduling_leds(
         &mut self,
         day_leds: u8,
@@ -739,6 +771,18 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
             return Err(Error::Validation(ValidationError {
                 field: "model",
                 reason: "set_scheduling_leds (OPCODE 162) requires Create 2; not supported on Create 1 or Roomba 400",
+            }));
+        }
+        if day_leds & 0x80 != 0 {
+            return Err(Error::Validation(ValidationError {
+                field: "day_leds",
+                reason: "bit 7 of day_leds is reserved; only bits 0-6 (Sun-Sat) are valid",
+            }));
+        }
+        if schedule_leds & 0xF0 != 0 {
+            return Err(Error::Validation(ValidationError {
+                field: "schedule_leds",
+                reason: "upper 4 bits of schedule_leds are reserved; only bits 0-3 are valid",
             }));
         }
         self.send_cmd(&command::encode_scheduling_leds(day_leds, schedule_leds))
@@ -995,6 +1039,16 @@ impl<M: Mode, T: Transport> Create<M, T> {
             return Err(Error::Validation(ValidationError {
                 field: "stream",
                 reason: "sensor queries cannot be sent while streaming; call toggle_stream(false) first",
+            }));
+        }
+        Ok(())
+    }
+
+    fn reject_if_not_streaming(&self) -> Result<(), Error<std::io::Error>> {
+        if !self.streaming {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "poll_stream requires an active stream; call start_stream() first",
             }));
         }
         Ok(())

@@ -414,3 +414,38 @@ in Off mode.
 
 ### Result
 248 tests pass (41 unit + 77 sync + 74 async + 56 protocol + 1 doc). CI green. no_std builds pass.
+
+## Round 14 — Group packet support, duplicate ID rejection, poll_stream guard, scheduling_leds reserved bits
+
+**Findings fixed (6):**
+
+1. **High: Group packet IDs accepted in `query_list`/`start_stream`**
+   - `decode_packets()` in `sensor.rs`: expands group IDs to constituent packets before decoding
+   - `expected_data_len()`: falls back to `group_data_len()` for group IDs (const fn)
+   - `start_stream()` payload calculation: group ID byte count = `members.len() + group_data_len` (accounts for per-member ID prefix in stream frames)
+   - Applies to both sync (`create.rs`) and async (`async_create.rs`, both alloc/no-alloc variants)
+
+2. **Medium: Duplicate packet IDs rejected**
+   - Added `has_duplicate_ids(ids: &[u8]) -> bool` in `sensor.rs` (256-bit stack bitset, O(n), no_std)
+   - `query_list()` and `start_stream()` now validate for duplicates before sending any bytes
+   - Both sync and async (alloc + no-alloc) variants updated
+
+3. **Medium: `query_sensor()` error message corrected**
+   - `query_sensor()` now says `query_sensor_raw_into()` (not `query_sensor_raw()` which is alloc-only)
+   - Fixed in both `create.rs` and `async_create.rs`
+
+4. **Medium: `poll_stream`/`poll_stream_with` require active stream**
+   - Added `reject_if_not_streaming()` helper to both `create.rs` and `async_create.rs`
+   - `poll_stream` / `poll_stream_with` return `ValidationError` if `start_stream()` was not called
+
+5. **Low: `set_scheduling_leds` rejects reserved bits**
+   - `day_leds & 0x80 != 0` → `ValidationError { field: "day_leds" }`
+   - `schedule_leds & 0xF0 != 0` → `ValidationError { field: "schedule_leds" }`
+   - Both sync and async updated with descriptive doc comments
+
+**Tests:** 271 total (was 248 → +23 new tests)
+- Protocol unit: `has_duplicate_ids` (5), `expected_data_len` with group IDs (4)
+- Sync integration: duplicate ID rejection (2), poll_stream guard (2), scheduling_leds reserved bits (3), group ID acceptance (1)
+- Async integration: same set (9)
+- Updated: `poll_stream_eof_returns_protocol_error` (sync + async) to call `start_stream` first
+- Updated: `start_stream_rejects_group_packet_id_before_send` → `start_stream_accepts_group_packet_id` (behavior change)
