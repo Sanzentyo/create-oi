@@ -1027,3 +1027,55 @@ cargo run -p create-oi-smol  --example play_midi --features midi -- /dev/cu.usbs
 `test_include_rests_false_unchanged` → `test_include_rests_disabled` (uses
 explicit `include_rests: false`).  `test_include_rests_basic` now exercises
 the default config directly.
+
+---
+
+## Round 27 — MIDI double-buffer playback (commit a46b63a)
+
+### Problem diagnosed
+
+User reported `Sakura Reincarnation OP.mid` had silent notes at high/exciting
+moments.  Investigation revealed:
+
+- 657 total notes, 41 chunks of ≤16 notes each
+- Track 0 ("Piano") pitches C5–C7 (72–96), all valid OI range 31–127
+- Climactic scale run: E5→F5→G5→A5→A#5→C6→D6→E6→F6→G6→A6→A#6→F6→A6→C7 at 172 ms/note
+- Each chunk ends with `REST(1) = 16 ms`, followed by a **22 ms gap** before the next chunk
+- Combined silence at chunk boundaries: 16 ms + 22 ms = **38 ms** (vs 16 ms expected)
+- At 172 ms/note, this 38 ms gap = 22% of note duration — clearly audible as a stutter
+
+Root cause: naive sequential algorithm uses `define_song(2 ms) + play_song + sleep(dur + 20 ms)`.
+The 22 ms = 20 ms buffer + 2 ms define_song latency was added AFTER the song ends, creating a
+systematic gap at every chunk boundary.
+
+### Fix
+
+Replaced all three `play_midi` examples (serial, tokio, smol) with a
+**double-buffer algorithm**:
+
+1. **Setup**: pre-load `chunks[0]` → slot 0 and `chunks[1]` → slot 1 before starting
+2. **Per-chunk loop**:
+   - Sleep until ~50 ms before expected chunk end
+   - Poll `SONG_PLAYING` (packet 37) every 5 ms until `false`
+   - Immediately fire `play_song(next_slot)` — already loaded, only 2 bytes ≈ 0.2 ms
+   - During next chunk's playback, pre-load the chunk after next into the free slot
+
+Gap reduced from **fixed 22 ms** to **OI sensor cadence (~15.6 ms) + query round-trip (~2 ms)**.
+
+### Removed
+
+`SONG_TIMING_BUFFER: Duration = Duration::from_millis(20)` — no longer needed.
+
+### New constants (all three examples)
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `SONG_POLL_INTERVAL` | 5 ms | Interval between `SONG_PLAYING` polls |
+| `SONG_POLL_EARLY` | 50 ms | Switch from sleep to polling this early |
+| `SONG_POLL_TIMEOUT` | 500 ms | Give up after this long past expected end |
+
+### Test results
+
+- `cargo test --workspace`: 307 tests passed
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean
+- `just check-nostd`: all 4 no_std / embedded builds pass
