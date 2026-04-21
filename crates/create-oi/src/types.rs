@@ -159,6 +159,61 @@ impl RobotModel {
         }
     }
 
+    /// Whether this model supports the Drive Direct command (opcode 145).
+    ///
+    /// Drive Direct was introduced with OI V2 (Create 1 / Roomba 500 series).
+    /// Roomba 400 only supports the Drive command (opcode 137).
+    #[inline(always)]
+    pub const fn supports_drive_direct(self) -> bool {
+        !matches!(self, Self::Roomba400)
+    }
+
+    /// Whether this model supports individual sensor packet IDs (7+).
+    ///
+    /// Roomba 400 only supports group sensor requests (groups 0–3). Create 1
+    /// and Create 2 both support individual packet IDs 7–42 and 7–58 respectively.
+    #[inline(always)]
+    pub const fn supports_individual_sensor_packets(self) -> bool {
+        !matches!(self, Self::Roomba400)
+    }
+
+    /// Maximum individual sensor packet ID (inclusive) for this model.
+    ///
+    /// - Create 2: 58 (packets 7–58, OI V3)
+    /// - Create 1: 42 (packets 7–42; packets 43–58 are Create 2-only)
+    /// - Roomba 400: 0 (no individual packet IDs; use group queries 0–3 only)
+    #[inline(always)]
+    pub const fn max_individual_sensor_packet_id(self) -> u8 {
+        match self {
+            Self::Create2 => 58,
+            Self::Create1 => 42,
+            Self::Roomba400 => 0,
+        }
+    }
+
+    /// Whether this model supports the Query List command (opcode 149).
+    ///
+    /// Query List was introduced in OI V2. Roomba 400 does not support it.
+    #[inline(always)]
+    pub const fn supports_query_list(self) -> bool {
+        !matches!(self, Self::Roomba400)
+    }
+
+    /// Whether this model supports the given group sensor packet ID.
+    ///
+    /// - Groups 0–3: all models (Roomba 400, Create 1, Create 2)
+    /// - Groups 4–6: Create 1 and Create 2 only
+    /// - Group 100: Create 2 only
+    #[inline(always)]
+    pub const fn supports_group_packet(self, group: u8) -> bool {
+        match group {
+            0..=3 => true,
+            4..=6 => !matches!(self, Self::Roomba400),
+            100 => matches!(self, Self::Create2),
+            _ => false,
+        }
+    }
+
     /// Recommended delay after sending a mode-change command.
     #[inline(always)]
     pub const fn mode_change_delay(self) -> Duration {
@@ -1047,6 +1102,57 @@ mod tests {
         assert_eq!(RobotModel::Create2.to_string(), "Create2");
         assert_eq!(RobotModel::Create1.to_string(), "Create1");
         assert_eq!(RobotModel::Roomba400.to_string(), "Roomba400");
+    }
+
+    #[test]
+    fn model_supports_drive_direct() {
+        assert!(RobotModel::Create1.supports_drive_direct());
+        assert!(RobotModel::Create2.supports_drive_direct());
+        assert!(!RobotModel::Roomba400.supports_drive_direct());
+    }
+
+    #[test]
+    fn model_supports_individual_sensor_packets() {
+        assert!(RobotModel::Create1.supports_individual_sensor_packets());
+        assert!(RobotModel::Create2.supports_individual_sensor_packets());
+        assert!(!RobotModel::Roomba400.supports_individual_sensor_packets());
+    }
+
+    #[test]
+    fn model_max_individual_sensor_packet_id() {
+        assert_eq!(RobotModel::Create2.max_individual_sensor_packet_id(), 58);
+        assert_eq!(RobotModel::Create1.max_individual_sensor_packet_id(), 42);
+        assert_eq!(RobotModel::Roomba400.max_individual_sensor_packet_id(), 0);
+    }
+
+    #[test]
+    fn model_supports_query_list() {
+        assert!(RobotModel::Create1.supports_query_list());
+        assert!(RobotModel::Create2.supports_query_list());
+        assert!(!RobotModel::Roomba400.supports_query_list());
+    }
+
+    #[test]
+    fn model_supports_group_packet() {
+        // Groups 0-3: all models
+        for g in 0..=3u8 {
+            assert!(RobotModel::Roomba400.supports_group_packet(g), "group {g}");
+            assert!(RobotModel::Create1.supports_group_packet(g), "group {g}");
+            assert!(RobotModel::Create2.supports_group_packet(g), "group {g}");
+        }
+        // Groups 4-6: Create 1 and Create 2 only
+        for g in 4..=6u8 {
+            assert!(!RobotModel::Roomba400.supports_group_packet(g), "group {g}");
+            assert!(RobotModel::Create1.supports_group_packet(g), "group {g}");
+            assert!(RobotModel::Create2.supports_group_packet(g), "group {g}");
+        }
+        // Group 100: Create 2 only
+        assert!(!RobotModel::Roomba400.supports_group_packet(100));
+        assert!(!RobotModel::Create1.supports_group_packet(100));
+        assert!(RobotModel::Create2.supports_group_packet(100));
+        // Unknown group
+        assert!(!RobotModel::Create2.supports_group_packet(7));
+        assert!(!RobotModel::Create2.supports_group_packet(99));
     }
 
     #[test]

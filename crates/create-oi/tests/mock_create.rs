@@ -1541,3 +1541,186 @@ fn set_scheduling_leds_accepts_valid_bits() {
         "should accept fully-set valid bits; got {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Model-guard tests (OI spec compliance)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roomba400_passive_to_safe_uses_control_opcode() {
+    // Roomba 400 SCI uses CONTROL (130) for Passive→Safe, not SAFE (131).
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Roomba400);
+    let create = create.start().unwrap().to_safe().unwrap();
+    let written = create.transport().written_bytes();
+    // START(128) + CONTROL(130)
+    assert_eq!(written, &[128, 130]);
+}
+
+#[test]
+fn create1_passive_to_safe_uses_safe_opcode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1);
+    let create = create.start().unwrap().to_safe().unwrap();
+    let written = create.transport().written_bytes();
+    assert_eq!(written, &[128, 131]);
+}
+
+#[test]
+fn drive_direct_rejected_on_roomba400() {
+    let mock = MockTransport::new();
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.drive_direct(
+        Velocity::new(0.1).unwrap(),
+        Velocity::new(0.1).unwrap(),
+    );
+    assert!(result.is_err(), "drive_direct must be rejected on Roomba 400");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(err_msg.contains("model"), "error should name the model field");
+}
+
+#[test]
+fn drive_twist_rejected_on_roomba400() {
+    let mock = MockTransport::new();
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.drive_twist(
+        Velocity::new(0.1).unwrap(),
+        AngularVelocity::new(0.0).unwrap(),
+    );
+    assert!(result.is_err(), "drive_twist must be rejected on Roomba 400");
+}
+
+#[test]
+fn stop_on_roomba400_uses_drive_opcode() {
+    // stop() on Roomba 400 must use Drive (opcode 137), not Drive Direct (opcode 145).
+    let mock = MockTransport::new();
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    robot.stop().unwrap();
+    let written = robot.transport().written_bytes();
+    // START(128) + CONTROL(130) + DRIVE(137, velocity=0x0000, radius=0x8000)
+    assert_eq!(written, &[128, 130, 137, 0x00, 0x00, 0x80, 0x00]);
+}
+
+#[test]
+fn stop_on_create2_uses_drive_direct_opcode() {
+    let mock = MockTransport::new();
+    let mut robot = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    robot.stop().unwrap();
+    let written = robot.transport().written_bytes();
+    // START(128) + SAFE(131) + DRIVE_DIRECT(145, right=0x0000, left=0x0000)
+    assert_eq!(written, &[128, 131, 145, 0x00, 0x00, 0x00, 0x00]);
+}
+
+#[test]
+fn clean_max_rejected_on_create1_from_passive() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1).start().unwrap();
+    let result = create.clean(CleanMode::Max);
+    assert!(result.is_err(), "CleanMode::Max must be rejected on Create 1");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(err_msg.contains("mode"), "error should name the mode field");
+}
+
+#[test]
+fn clean_max_rejected_on_create1_from_safe() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create1)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = create.clean(CleanMode::Max);
+    assert!(result.is_err(), "CleanMode::Max must be rejected on Create 1");
+}
+
+#[test]
+fn clean_max_accepted_on_create2() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2).start().unwrap();
+    let result = create.clean(CleanMode::Max);
+    assert!(result.is_ok(), "CleanMode::Max must be accepted on Create 2");
+}
+
+#[test]
+fn query_list_rejected_on_roomba400() {
+    let mock = MockTransport::with_read_data(&[]);
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.query_list(&[0]);
+    assert!(result.is_err(), "query_list must be rejected on Roomba 400");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(err_msg.contains("model"), "error should name the model field");
+}
+
+#[test]
+fn query_sensor_individual_packet_rejected_on_roomba400() {
+    // Roomba 400 does not support individual sensor packet IDs (7+).
+    let mock = MockTransport::with_read_data(&[0; 2]);
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    // Packet 7 is the first individual packet (bump/wheel drop, 1 byte).
+    let result = robot.query_sensor_raw(7);
+    assert!(result.is_err(), "individual sensor packets must be rejected on Roomba 400");
+}
+
+#[test]
+fn query_sensor_packet_43_rejected_on_create1() {
+    // Packet 43+ are Create 2 only.
+    let mock = MockTransport::with_read_data(&[0; 2]);
+    let mut robot = Create::new(mock, RobotModel::Create1)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.query_sensor_raw(43);
+    assert!(result.is_err(), "packet 43 must be rejected on Create 1");
+}
+
+#[test]
+fn query_sensor_group_100_rejected_on_create1() {
+    // Group 100 is Create 2 only.
+    let mock = MockTransport::with_read_data(&[0; 100]);
+    let mut robot = Create::new(mock, RobotModel::Create1)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.query_sensor_raw(100);
+    assert!(result.is_err(), "group 100 must be rejected on Create 1");
+}
+
+#[test]
+fn query_sensor_group_0_accepted_on_roomba400() {
+    // Group 0 is supported on all models.
+    // Group 0 data = 26 bytes per spec.
+    let mock = MockTransport::with_read_data(&[0; 26]);
+    let mut robot = Create::new(mock, RobotModel::Roomba400)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let result = robot.query_sensor_raw(0);
+    assert!(result.is_ok(), "group 0 must be accepted on Roomba 400; got {result:?}");
+}

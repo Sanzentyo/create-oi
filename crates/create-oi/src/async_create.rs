@@ -105,10 +105,18 @@ impl<T: AsyncTransport> AsyncCreate<Off, T> {
 
 impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     /// Transition to Safe mode.
+    ///
+    /// On Roomba 400, uses CONTROL (opcode 130) instead of SAFE (opcode 131) because
+    /// Roomba 400 SCI does not implement the SAFE command for the Passive→Safe transition.
     pub async fn to_safe(
         mut self,
     ) -> Result<AsyncCreate<Safe, T>, TransitionError<Self, T::Error>> {
-        if let Err(e) = self.send_cmd(&command::encode_safe()).await {
+        let cmd = if self.model == RobotModel::Roomba400 {
+            command::encode_control()
+        } else {
+            command::encode_safe()
+        };
+        if let Err(e) = self.send_cmd(&cmd).await {
             return Err(TransitionError {
                 create: self,
                 source: e,
@@ -165,10 +173,22 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
     /// - [`CleanMode::Default`] — standard cleaning pattern
     /// - [`CleanMode::Spot`] — spot cleaning (small area)
     /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
+    ///
+    /// **Note:** `CleanMode::Max` (opcode 136) is not available on Create 1; on that model
+    /// opcode 136 triggers the Demo command instead. Returns `ValidationError` on Create 1.
     pub async fn clean(
         mut self,
         mode: CleanMode,
     ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
+        if mode == CleanMode::Max && self.model == RobotModel::Create1 {
+            return Err(TransitionError {
+                create: self,
+                source: Error::Validation(ValidationError {
+                    field: "mode",
+                    reason: "CleanMode::Max (OPCODE 136) is a Demo command on Create 1; use CleanMode::Default or CleanMode::Spot",
+                }),
+            });
+        }
         let cmd = match mode {
             CleanMode::Default => command::encode_clean(),
             CleanMode::Spot => command::encode_spot(),
@@ -322,6 +342,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         buf: &mut [u8],
     ) -> Result<usize, Error<T::Error>> {
         self.reject_if_streaming()?;
+        self.validate_packet_id(packet_id)?;
         let len = create_oi_protocol::opcode::packet_info(packet_id)
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
@@ -348,6 +369,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[must_use = "query result must be used"]
     pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<T::Error>> {
         self.reject_if_streaming()?;
+        self.validate_packet_id(packet_id)?;
         let len = create_oi_protocol::opcode::packet_info(packet_id)
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
@@ -382,8 +404,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query multiple sensors at once and decode all of them.
     ///
     /// Validates all packet IDs before sending any bytes to the robot.
-    /// Returns `ValidationError` if a sensor stream is currently active or
-    /// if the list contains duplicate packet IDs.
+    /// Returns `ValidationError` if a sensor stream is currently active,
+    /// if the list contains duplicate packet IDs, if the model does not support
+    /// Query List (Roomba 400), or if a packet ID is not available on this model.
     ///
     /// Group packet IDs (0-6, 100) are accepted; the robot expands them and
     /// returns the constituent individual packets, which are then decoded.
@@ -396,11 +419,20 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
         self.reject_if_streaming()?;
+        if !self.model.supports_query_list() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
+            }));
+        }
         if sensor::has_duplicate_ids(packet_ids) {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
                 reason: "duplicate packet IDs are not allowed in query_list",
             }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
         }
         let expected_len = sensor::expected_data_len(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
@@ -422,11 +454,20 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
         self.reject_if_streaming()?;
+        if !self.model.supports_query_list() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
+            }));
+        }
         if sensor::has_duplicate_ids(packet_ids) {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
                 reason: "duplicate packet IDs are not allowed in query_list",
             }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
         }
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
@@ -462,8 +503,8 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// Returns an error if this robot model does not support sensor streaming,
     /// if the packet ID list exceeds the protocol limit, if the total stream
-    /// payload per cycle would exceed 255 bytes, or if the list contains
-    /// duplicate packet IDs.
+    /// payload per cycle would exceed 255 bytes, if the list contains
+    /// duplicate packet IDs, or if a packet ID is not available on this model.
     ///
     /// Group packet IDs (0-6, 100) are accepted; the per-cycle payload is
     /// computed as if each group were expanded to its constituent packets.
@@ -484,6 +525,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 field: "packet_ids",
                 reason: "duplicate packet IDs are not allowed in start_stream",
             }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
         }
         let payload_bytes =
             packet_ids
@@ -529,6 +573,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 field: "packet_ids",
                 reason: "duplicate packet IDs are not allowed in start_stream",
             }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
         }
         let payload_bytes =
             packet_ids
@@ -730,11 +777,20 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Drive wheels directly with individual velocities.
+    ///
+    /// Returns `ValidationError` if this model is Roomba 400 (OPCODE 145 is
+    /// not supported; Roomba 400 only supports the Drive command, opcode 137).
     pub async fn drive_direct(
         &mut self,
         right: Velocity,
         left: Velocity,
     ) -> Result<(), Error<T::Error>> {
+        if !self.model.supports_drive_direct() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "drive_direct (OPCODE 145) requires Create 1 or Create 2; not supported on Roomba 400",
+            }));
+        }
         self.send_cmd(&command::encode_drive_direct(
             right.to_mm_per_sec(),
             left.to_mm_per_sec(),
@@ -762,8 +818,17 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Stop all motors (both wheels to 0 mm/s).
+    ///
+    /// On Roomba 400, uses the Drive command (opcode 137) since Drive Direct
+    /// (opcode 145) is not available. On Create 1 and Create 2, uses Drive Direct.
     pub async fn stop(&mut self) -> Result<(), Error<T::Error>> {
-        self.send_cmd(&command::encode_drive_direct(0, 0)).await
+        if self.model == RobotModel::Roomba400 {
+            // Roomba 400 does not support Drive Direct (opcode 145).
+            // Drive at velocity 0 with the "straight" special radius (0x8000 wire value = i16::MIN).
+            self.send_cmd(&command::encode_drive(0, i16::MIN)).await
+        } else {
+            self.send_cmd(&command::encode_drive_direct(0, 0)).await
+        }
     }
 
     /// Set LEDs.
@@ -923,11 +988,20 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Computes individual wheel speeds via differential drive kinematics:
     /// `right = v + ω × (axle/2)`, `left = v − ω × (axle/2)`.
     /// Wheel speeds are clamped to ±500 mm/s as required by the OI spec.
+    ///
+    /// Returns `ValidationError` if this model is Roomba 400 (uses Drive Direct
+    /// internally, which is not supported on Roomba 400).
     pub async fn drive_twist(
         &mut self,
         velocity: Velocity,
         omega: AngularVelocity,
     ) -> Result<(), Error<T::Error>> {
+        if !self.model.supports_drive_direct() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "drive_twist (uses OPCODE 145) requires Create 1 or Create 2; not supported on Roomba 400",
+            }));
+        }
         let half_axle_mm = self.model.axle_length() * 500.0;
         let v_mm = velocity.to_mm_per_sec() as f32;
         let right_mm = (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500);
@@ -940,10 +1014,22 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// Per the OI spec, CLEAN/SPOT/MAX are valid from Passive, Safe, or Full mode
     /// and always transition the robot to Passive mode.
+    ///
+    /// **Note:** `CleanMode::Max` (opcode 136) is not available on Create 1; on that model
+    /// opcode 136 triggers the Demo command instead. Returns `ValidationError` on Create 1.
     pub async fn clean(
         mut self,
         mode: CleanMode,
     ) -> Result<AsyncCreate<Passive, T>, TransitionError<Self, T::Error>> {
+        if mode == CleanMode::Max && self.model == RobotModel::Create1 {
+            return Err(TransitionError {
+                create: self,
+                source: Error::Validation(ValidationError {
+                    field: "mode",
+                    reason: "CleanMode::Max (OPCODE 136) is a Demo command on Create 1; use CleanMode::Default or CleanMode::Spot",
+                }),
+            });
+        }
         let cmd = match mode {
             CleanMode::Default => command::encode_clean(),
             CleanMode::Spot => command::encode_spot(),
@@ -1153,6 +1239,32 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
                 field: "stream",
                 reason: "poll_stream requires an active stream; call start_stream() first",
             }));
+        }
+        Ok(())
+    }
+
+    fn validate_packet_id(&self, packet_id: u8) -> Result<(), Error<T::Error>> {
+        use create_oi_protocol::opcode;
+        if opcode::group_data_len(packet_id).is_some() {
+            if !self.model.supports_group_packet(packet_id) {
+                return Err(Error::Validation(ValidationError {
+                    field: "packet_id",
+                    reason: "sensor group packet is not supported by this robot model",
+                }));
+            }
+        } else if opcode::packet_info(packet_id).is_some() {
+            if !self.model.supports_individual_sensor_packets() {
+                return Err(Error::Validation(ValidationError {
+                    field: "packet_id",
+                    reason: "individual sensor packets are not supported by Roomba 400; use group IDs 0–3",
+                }));
+            }
+            if packet_id > self.model.max_individual_sensor_packet_id() {
+                return Err(Error::Validation(ValidationError {
+                    field: "packet_id",
+                    reason: "sensor packet ID is not available on this robot model",
+                }));
+            }
         }
         Ok(())
     }
