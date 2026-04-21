@@ -54,6 +54,6 @@ name = "dock_smol"
 required-features = []
 
 [[example]]
-name = "play_midi_smol"
+name = "play_midi"
 required-features = ["midi"]
 

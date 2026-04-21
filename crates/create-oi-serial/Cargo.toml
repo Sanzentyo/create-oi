@@ -53,7 +53,7 @@ name = "schedule_sync"
 path = "examples/schedule_sync.rs"
 
 [[example]]
-name = "play_midi_sync"
-path = "examples/play_midi_sync.rs"
+name = "play_midi"
+path = "examples/play_midi.rs"
 required-features = ["midi"]
 

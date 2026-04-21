@@ -55,7 +55,7 @@ name = "dock_tokio"
 path = "examples/dock_tokio.rs"
 
 [[example]]
-name = "play_midi_tokio"
-path = "examples/play_midi_tokio.rs"
+name = "play_midi"
+path = "examples/play_midi.rs"
 required-features = ["midi"]
 

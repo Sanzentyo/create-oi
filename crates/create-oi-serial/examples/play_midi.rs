@@ -1,16 +1,33 @@
-//! Play a MIDI file on the robot using `TokioTransport`.
+//! Play a MIDI file on the robot using `SerialTransport`.
 //!
-//! See `play_midi_sync` for a full explanation of the sequential playback
-//! strategy and timing considerations.  This variant uses Tokio async I/O
-//! and `tokio::time::sleep` for the chunk-duration wait.
+//! Reads a Standard MIDI File (SMF), converts it to robot song notes, and
+//! plays the notes sequentially through the robot's built-in speaker.
+//!
+//! ## Playback strategy
+//!
+//! Songs are uploaded in chunks of up to 16 notes (the OI limit per song slot).
+//! Two slots (0 and 1) are **alternated** to eliminate any same-slot reuse
+//! artefacts.  Each chunk is uploaded and played sequentially:
+//!
+//! 1. `define_song(slot, chunk[i])` — upload the chunk (~2 ms serial write).
+//! 2. `play_song(slot)` — start playback; record `play_start`.
+//! 3. Sleep until `chunk_duration + SONG_TIMING_BUFFER` elapses.
+//! 4. Repeat with the other slot for chunk `i+1`.
+//!
+//! ## Timing note (macOS USB-to-serial)
+//!
+//! On macOS, USB-to-serial write latency is typically ≤10 ms. `SONG_TIMING_BUFFER`
+//! (20 ms) provides a 2× margin so `play_song` always arrives at the robot after
+//! the previous chunk has finished playing.
 //!
 //! # Usage
 //!
 //! ```text
-//! cargo run --example play_midi_tokio --features midi -- <PORT> [OPTIONS]
+//! cargo run -p create-oi-serial --example play_midi --features midi -- <PORT> [OPTIONS]
 //! ```
 
 use std::path::PathBuf;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -18,17 +35,17 @@ use create_oi::midi::{
     MidiConfig, VoiceSelection, midi_initial_tempo, midi_to_notes, notes_to_chunks,
 };
 use create_oi::prelude::*;
-use create_oi_tokio::TokioTransport;
+use create_oi_serial::SerialTransport;
 
-/// See `play_midi_sync` for rationale.  macOS USB-serial latency is typically
-/// ≤10 ms; 20 ms provides a 2× margin.
+/// Extra sleep added beyond each chunk's calculated duration.
+///
+/// This must exceed the USB-to-serial write latency so that `play_song`
+/// always arrives at the robot after the previous chunk has finished.
+/// macOS USB-serial latency is typically ≤10 ms; 20 ms provides a 2× margin.
 const SONG_TIMING_BUFFER: Duration = Duration::from_millis(20);
 
 #[derive(Parser, Debug)]
-#[command(
-    version,
-    about = "Play a MIDI file on the iRobot Create 2 (Tokio async)"
-)]
+#[command(version, about = "Play a MIDI file on the iRobot Create 2")]
 struct Args {
     /// Serial port (e.g. /dev/ttyUSB0 or /dev/cu.usbserial-*)
     port: String,
@@ -48,9 +65,9 @@ struct Args {
     #[arg(short = 'm', long)]
     merge_tracks: bool,
 
-    /// Include silence gaps between notes as rest notes (pitch 0)
-    #[arg(short = 'r', long)]
-    include_rests: bool,
+    /// Omit silence gaps between notes (suppress pitch-0 rest notes)
+    #[arg(long)]
+    no_rests: bool,
 
     /// Keep the leading silence before the first note (only with --include-rests)
     #[arg(long)]
@@ -70,8 +87,7 @@ fn chunk_duration(chunk: &[SongNote]) -> Duration {
     )
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let path = args.file.unwrap_or_else(|| {
@@ -99,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tempo_micros_per_beat: tempo_override,
         voice_selection: VoiceSelection::HighestPitch,
         channel: args.channel,
-        include_rests: args.include_rests,
+        include_rests: !args.no_rests,
         trim_start: !args.keep_start_silence,
         trim_end: !args.keep_end_silence,
         ..MidiConfig::default()
@@ -116,11 +132,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Opening {}…", args.port);
-    let transport = TokioTransport::open(&args.port, RobotModel::Create2)?;
-    let create = AsyncCreate::new(transport, RobotModel::Create2);
-    let create = create.start().await.map_err(|e| e.source)?;
-    let mut create = create.to_safe().await.map_err(|e| e.source)?;
+    let transport = SerialTransport::open(&args.port, RobotModel::Create2)?;
+    let create = Create::new(transport, RobotModel::Create2);
+    let create = create.start().map_err(|e| e.source)?;
+    let mut create = create.to_safe().map_err(|e| e.source)?;
 
+    // Alternate between slots 0 and 1 to avoid any same-slot reuse artefacts.
     let slots = [SongNumber::new(0)?, SongNumber::new(1)?];
 
     for (i, chunk) in chunks.iter().enumerate() {
@@ -151,18 +168,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pitch_max,
         );
 
-        create.define_song(slot, chunk).await?;
-        create.play_song(slot).await?;
+        create.define_song(slot, chunk)?;
+        create.play_song(slot)?;
         let play_start = Instant::now();
 
         let target = dur + SONG_TIMING_BUFFER;
         let elapsed = play_start.elapsed();
         if target > elapsed {
-            tokio::time::sleep(target - elapsed).await;
+            sleep(target - elapsed);
         }
     }
 
-    let _create = create.to_passive().await.map_err(|e| e.source)?;
+    let _create = create.to_passive().map_err(|e| e.source)?;
     println!("Done!");
     Ok(())
 }

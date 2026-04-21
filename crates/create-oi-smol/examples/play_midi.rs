@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```text
-//! cargo run --example play_midi_smol --features midi -- <PORT> [OPTIONS]
+//! cargo run -p create-oi-smol --example play_midi --features midi -- <PORT> [OPTIONS]
 //! ```
 
 use std::path::PathBuf;
@@ -48,9 +48,9 @@ struct Args {
     #[arg(short = 'm', long)]
     merge_tracks: bool,
 
-    /// Include silence gaps between notes as rest notes (pitch 0)
-    #[arg(short = 'r', long)]
-    include_rests: bool,
+    /// Omit silence gaps between notes (suppress pitch-0 rest notes)
+    #[arg(long)]
+    no_rests: bool,
 
     /// Keep the leading silence before the first note (only with --include-rests)
     #[arg(long)]
@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tempo_micros_per_beat: tempo_override,
             voice_selection: VoiceSelection::HighestPitch,
             channel: args.channel,
-            include_rests: args.include_rests,
+            include_rests: !args.no_rests,
             trim_start: !args.keep_start_silence,
             trim_end: !args.keep_end_silence,
             ..MidiConfig::default()

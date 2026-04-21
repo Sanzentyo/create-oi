@@ -93,9 +93,9 @@ pub struct MidiConfig {
     ///
     /// Works in both single-track and multi-track merge modes.
     pub channel: Option<u8>,
-    /// When `true`, silence gaps between notes are encoded as rest notes
-    /// (MIDI pitch 0) in the output. Default: `false` (gaps are dropped so
-    /// that notes play back-to-back, which is the robot's native behaviour).
+    /// When `true` (default), silence gaps between notes are encoded as rest
+    /// notes (MIDI pitch 0) in the output. Set to `false` to drop gaps so that
+    /// notes play back-to-back.
     ///
     /// Note spans with out-of-range pitches (those that would be dropped by
     /// the converter) are treated as silence for this purpose.
@@ -121,7 +121,7 @@ impl Default for MidiConfig {
             voice_selection: VoiceSelection::default(),
             filter_percussion: true,
             channel: None,
-            include_rests: false,
+            include_rests: true,
             trim_start: true,
             trim_end: true,
         }
@@ -1585,10 +1585,14 @@ mod tests {
     }
 
     #[test]
-    fn test_include_rests_false_unchanged() {
-        // Default config: include_rests=false → gaps not emitted.
+    fn test_include_rests_disabled() {
+        // Explicit include_rests=false: gaps are dropped; notes play back-to-back.
         let midi = make_rest_gap_track();
-        let notes = midi_to_notes(&midi, &MidiConfig::default()).unwrap();
+        let config = MidiConfig {
+            include_rests: false,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].midi_note(), 60); // C4
         assert_eq!(notes[1].midi_note(), 64); // E4
@@ -1596,13 +1600,9 @@ mod tests {
 
     #[test]
     fn test_include_rests_basic() {
-        // include_rests=true → gap between C4 and E4 becomes a rest note.
+        // Default config (include_rests=true): gap between C4 and E4 becomes a rest note.
         let midi = make_rest_gap_track();
-        let config = MidiConfig {
-            include_rests: true,
-            ..MidiConfig::default()
-        };
-        let notes = midi_to_notes(&midi, &config).unwrap();
+        let notes = midi_to_notes(&midi, &MidiConfig::default()).unwrap();
         assert_eq!(notes.len(), 3);
         assert_eq!(notes[0].midi_note(), 60); // C4
         assert!(notes[1].is_rest());
