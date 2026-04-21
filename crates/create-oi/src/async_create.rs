@@ -36,6 +36,13 @@ use alloc::vec::Vec;
 ///
 /// Mode transitions consume `self` and return a new `AsyncCreate` in the target
 /// mode, ensuring the compiler enforces valid mode sequences.
+///
+/// # TypeState vs. actual robot mode
+///
+/// The mode type parameter tracks the **last commanded mode**, not the robot's
+/// current hardware state. The robot can change mode autonomously (e.g. safety
+/// events, button presses). Call [`read_oi_mode`](AsyncCreate::read_oi_mode) to
+/// read the actual mode from the robot.
 #[derive(Debug)]
 pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
     transport: T,
@@ -105,6 +112,17 @@ impl<T: AsyncTransport> AsyncCreate<Passive, T> {
         self.sleep_mode_change().await;
         Ok(self.transition())
     }
+
+    /// Send STOP and transition to Off mode.
+    pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
 }
 
 impl<T: AsyncTransport> AsyncCreate<Safe, T> {
@@ -135,6 +153,17 @@ impl<T: AsyncTransport> AsyncCreate<Safe, T> {
         self.sleep_mode_change().await;
         Ok(self.transition())
     }
+
+    /// Send STOP and transition to Off mode.
+    pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
 }
 
 impl<T: AsyncTransport> AsyncCreate<Full, T> {
@@ -163,6 +192,17 @@ impl<T: AsyncTransport> AsyncCreate<Full, T> {
             });
         }
         self.sleep_mode_change().await;
+        Ok(self.transition())
+    }
+
+    /// Send STOP and transition to Off mode.
+    pub async fn to_off(mut self) -> Result<AsyncCreate<Off, T>, TransitionError<Self, T::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()).await {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
         Ok(self.transition())
     }
 }
@@ -227,13 +267,27 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Query multiple sensors at once and decode all of them.
     ///
     /// Validates all packet IDs before sending any bytes to the robot.
-    /// Supports up to 52 packet IDs (the maximum in any OI sensor group).
+    ///
+    /// # Limits
+    ///
+    /// This async implementation uses a fixed stack buffer sized for the
+    /// largest OI sensor group (Group-100, 52 packet IDs). Passing more
+    /// than 52 IDs returns a `ValidationError`. For longer lists, use the
+    /// sync `Create::query_list` which allocates a `Vec`.
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+        // Cap at Group-100 size to match the stack buffer below.
+        const ASYNC_MAX_IDS: usize = 52;
+        if packet_ids.len() > ASYNC_MAX_IDS {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "async query_list supports at most 52 packet IDs; use sync API for longer lists",
+            }));
+        }
         // Validate packet IDs and compute expected response length BEFORE sending.
         let expected_len = sensor::expected_data_len(packet_ids)?;
         // Group-100 has 52 IDs — the largest valid group. Stack-buffer accordingly.
-        const MAX_CMD: usize = 2 + 52;
+        const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut cmd_buf = [0u8; MAX_CMD];
         let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
         self.send_cmd(&cmd_buf[..cmd_len]).await?;
@@ -259,6 +313,12 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// Returns an error if this robot model does not support sensor streaming,
     /// or if the packet ID list exceeds the protocol limit.
+    ///
+    /// # Limits
+    ///
+    /// This async implementation uses a fixed stack buffer sized for the
+    /// largest OI sensor group (Group-100, 52 packet IDs). Passing more
+    /// than 52 IDs returns a `ValidationError`.
     pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
@@ -266,7 +326,14 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
-        const MAX_CMD: usize = 2 + 52;
+        const ASYNC_MAX_IDS: usize = 52;
+        if packet_ids.len() > ASYNC_MAX_IDS {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "async start_stream supports at most 52 packet IDs; use sync API for longer lists",
+            }));
+        }
+        const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut buf = [0u8; MAX_CMD];
         let len = command::encode_stream_into(&mut buf, packet_ids)?;
         self.send_cmd(&buf[..len]).await
@@ -453,7 +520,7 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         number: SongNumber,
         notes: &[(u8, u8)],
     ) -> Result<(), Error<T::Error>> {
-        let mut buf = [0u8; 35]; // max song: 2 header + 16 notes * 2 bytes = 34
+        let mut buf = [0u8; 35]; // 1 opcode + 1 song_number + 1 count + 16*2 notes = 35
         let len = command::encode_song_into(&mut buf, number.get(), notes)?;
         self.send_cmd(&buf[..len]).await
     }
@@ -591,16 +658,19 @@ impl<M: FullControl, T: AsyncTransport> AsyncCreate<M, T> {
 
 impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     /// Get the robot model.
+    #[must_use]
     pub fn model(&self) -> CreateRobotModel {
         self.model
     }
 
     /// Consume the robot and return the underlying transport.
+    #[must_use]
     pub fn into_transport(self) -> T {
         self.transport
     }
 
     /// Borrow the underlying transport.
+    #[must_use]
     pub fn transport(&self) -> &T {
         &self.transport
     }

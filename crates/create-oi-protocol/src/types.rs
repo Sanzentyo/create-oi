@@ -175,6 +175,18 @@ impl fmt::Display for DayOfWeek {
     }
 }
 
+impl TryFrom<u8> for DayOfWeek {
+    type Error = u8;
+
+    /// Convert a day index (0 = Sunday … 6 = Saturday) to a `DayOfWeek`.
+    ///
+    /// Returns `Err(v)` for values outside 0–6.
+    #[inline(always)]
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        Self::from_raw(v).ok_or(v)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IR character
 // ---------------------------------------------------------------------------
@@ -270,8 +282,12 @@ mod tests {
         for i in 0u8..=6 {
             let day = DayOfWeek::from_raw(i).expect("valid day index");
             assert_eq!(day.to_raw(), i);
+            // TryFrom<u8> must agree with from_raw
+            let day2 = DayOfWeek::try_from(i).expect("try_from valid");
+            assert_eq!(day, day2);
         }
         assert!(DayOfWeek::from_raw(7).is_none());
+        assert!(DayOfWeek::try_from(7u8).is_err());
     }
 
     #[test]

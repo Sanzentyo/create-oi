@@ -41,6 +41,17 @@ pub mod sensor;
 pub mod stream;
 pub mod types;
 
+// ---------------------------------------------------------------------------
+// Protocol limits
+// ---------------------------------------------------------------------------
+
+/// Maximum number of notes in a single song definition (OI spec §5.13).
+pub const MAX_SONG_NOTES: usize = 16;
+
+/// Maximum number of packet IDs in a single query-list or stream command
+/// (count byte is `u8`, so the protocol cap is 255).
+pub const MAX_PACKET_IDS: usize = 255;
+
 /// Convenience re-exports of commonly used protocol items.
 pub mod prelude {
     pub use crate::error::ProtocolError;

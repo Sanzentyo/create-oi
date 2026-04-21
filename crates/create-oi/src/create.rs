@@ -23,6 +23,13 @@ use std::marker::PhantomData;
 ///
 /// Mode transitions consume `self` and return a new `Create` in the target mode,
 /// ensuring the compiler enforces valid mode sequences.
+///
+/// # TypeState vs. actual robot mode
+///
+/// The mode type parameter tracks the **last commanded mode**, not the robot's
+/// current hardware state. The robot can change mode autonomously (e.g. safety
+/// events, button presses). Call [`read_oi_mode`](Create::read_oi_mode) to
+/// read the actual mode from the robot.
 #[derive(Debug)]
 pub struct Create<M: Mode, T: Transport> {
     transport: T,
@@ -88,6 +95,20 @@ impl<T: Transport> Create<Passive, T> {
         self.sleep_mode_change();
         Ok(self.transition())
     }
+
+    /// Send STOP and transition to Off mode.
+    ///
+    /// The OI session is ended. To reconnect, create a new
+    /// `Create::<Off, _>::new(transport, model)`.
+    pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
 }
 
 impl<T: Transport> Create<Safe, T> {
@@ -116,6 +137,17 @@ impl<T: Transport> Create<Safe, T> {
         self.sleep_mode_change();
         Ok(self.transition())
     }
+
+    /// Send STOP and transition to Off mode.
+    pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
 }
 
 impl<T: Transport> Create<Full, T> {
@@ -142,6 +174,17 @@ impl<T: Transport> Create<Full, T> {
             });
         }
         self.sleep_mode_change();
+        Ok(self.transition())
+    }
+
+    /// Send STOP and transition to Off mode.
+    pub fn to_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_stop()) {
+            return Err(TransitionError {
+                robot: self,
+                source: e,
+            });
+        }
         Ok(self.transition())
     }
 }
@@ -548,16 +591,19 @@ impl<M: FullControl, T: Transport> Create<M, T> {
 
 impl<M: Mode, T: Transport> Create<M, T> {
     /// Get the robot model.
+    #[must_use]
     pub fn model(&self) -> CreateRobotModel {
         self.model
     }
 
     /// Consume the robot and return the underlying transport.
+    #[must_use]
     pub fn into_transport(self) -> T {
         self.transport
     }
 
     /// Borrow the underlying transport.
+    #[must_use]
     pub fn transport(&self) -> &T {
         &self.transport
     }

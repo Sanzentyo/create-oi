@@ -148,6 +148,39 @@ fn robot_full_to_safe() {
 }
 
 #[test]
+fn robot_passive_to_off() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().unwrap();
+
+    let off = robot.to_off().unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 173]); // START + STOP
+}
+
+#[test]
+fn robot_safe_to_off() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().unwrap().to_safe().unwrap();
+
+    let off = robot.to_off().unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 131, 173]); // START + SAFE + STOP
+}
+
+#[test]
+fn robot_full_to_off() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().unwrap().to_full().unwrap();
+
+    let off = robot.to_off().unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 132, 173]); // START + FULL + STOP
+}
+
+#[test]
 fn robot_full_to_passive() {
     let mock = MockTransport::new();
     let robot = Create::new(mock, CreateRobotModel::Create2);

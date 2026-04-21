@@ -136,6 +136,39 @@ async fn async_full_to_safe() {
 }
 
 #[tokio::test]
+async fn async_passive_to_off() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().await.unwrap();
+
+    let off = robot.to_off().await.unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 173]); // START + STOP
+}
+
+#[tokio::test]
+async fn async_safe_to_off() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().await.unwrap().to_safe().await.unwrap();
+
+    let off = robot.to_off().await.unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 131, 173]); // START + SAFE + STOP
+}
+
+#[tokio::test]
+async fn async_full_to_off() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let robot = robot.start().await.unwrap().to_full().await.unwrap();
+
+    let off = robot.to_off().await.unwrap();
+    let transport = off.into_transport();
+    assert_eq!(transport.written_bytes(), &[128, 132, 173]); // START + FULL + STOP
+}
+
+#[tokio::test]
 async fn async_full_to_passive() {
     let mock = MockAsyncTransport::new();
     let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
@@ -331,6 +364,39 @@ async fn async_set_schedule_invalid_time_rejects() {
         .await
         .unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_query_list_too_many_ids_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    // 53 IDs exceeds the async stack buffer limit of 52.
+    let ids: Vec<u8> = (7..60).collect(); // 53 IDs
+    let err = robot.query_list(&ids).await.unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+#[tokio::test]
+async fn async_start_stream_too_many_ids_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let ids: Vec<u8> = (7..60).collect(); // 53 IDs
+    let err = robot.start_stream(&ids).await.unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError, got {err:?}"
+    );
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
 }
 
