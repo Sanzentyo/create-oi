@@ -138,6 +138,23 @@ impl DayOfWeek {
         self as u8
     }
 
+    /// Convert a day index (0 = Sunday … 6 = Saturday) to a `DayOfWeek`.
+    ///
+    /// Returns `None` for values outside 0–6.
+    #[inline(always)]
+    pub const fn from_raw(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Sunday),
+            1 => Some(Self::Monday),
+            2 => Some(Self::Tuesday),
+            3 => Some(Self::Wednesday),
+            4 => Some(Self::Thursday),
+            5 => Some(Self::Friday),
+            6 => Some(Self::Saturday),
+            _ => None,
+        }
+    }
+
     #[inline(always)]
     pub const fn name(self) -> &'static str {
         match self {
@@ -241,5 +258,38 @@ impl fmt::Display for IrChar {
             Self::Unknown(x) => write!(f, "Unknown({x})"),
             _ => f.write_str(self.name()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn day_of_week_round_trip() {
+        for i in 0u8..=6 {
+            let day = DayOfWeek::from_raw(i).expect("valid day index");
+            assert_eq!(day.to_raw(), i);
+        }
+        assert!(DayOfWeek::from_raw(7).is_none());
+    }
+
+    #[test]
+    fn day_of_week_display() {
+        assert_eq!(DayOfWeek::Sunday.to_string(), "Sunday");
+        assert_eq!(DayOfWeek::Saturday.to_string(), "Saturday");
+    }
+
+    #[test]
+    fn oi_mode_display() {
+        assert_eq!(OiMode::Off.to_string(), "Off");
+        assert_eq!(OiMode::Full.to_string(), "Full");
+        assert_eq!(OiMode::Unknown(42).to_string(), "Unknown(42)");
+    }
+
+    #[test]
+    fn charging_state_display() {
+        assert_eq!(ChargingState::NotCharging.to_string(), "NotCharging");
+        assert_eq!(ChargingState::Unknown(99).to_string(), "Unknown(99)");
     }
 }

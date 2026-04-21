@@ -798,4 +798,71 @@ mod tests {
         };
         assert_eq!(bits.to_raw(), 0xFF);
     }
+
+    // -----------------------------------------------------------------------
+    // TryFrom<f32> tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn angular_velocity_try_from() {
+        assert!(AngularVelocity::try_from(0.0_f32).is_ok());
+        assert!(AngularVelocity::try_from(core::f32::consts::PI).is_ok());
+        assert!(AngularVelocity::try_from(-core::f32::consts::PI).is_ok());
+        assert!(AngularVelocity::try_from(4.0_f32).is_err()); // > π
+        assert!(AngularVelocity::try_from(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn radius_try_from_builds_curve() {
+        let r = Radius::try_from(0.5_f32).unwrap();
+        assert_eq!(r.to_mm(), 500);
+        assert!(Radius::try_from(2.1_f32).is_err()); // > 2.0
+        assert!(Radius::try_from(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn motor_power_try_from() {
+        assert!(MotorPower::try_from(0.0_f32).is_ok());
+        assert!(MotorPower::try_from(1.0_f32).is_ok());
+        assert!(MotorPower::try_from(-1.0_f32).is_ok());
+        assert!(MotorPower::try_from(1.1_f32).is_err());
+        assert!(MotorPower::try_from(f32::NAN).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Display format tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn velocity_display() {
+        assert_eq!(Velocity::new(0.5).unwrap().to_string(), "0.500 m/s");
+        assert_eq!(Velocity::new(-0.5).unwrap().to_string(), "-0.500 m/s");
+        assert_eq!(Velocity::new(0.0).unwrap().to_string(), "0.000 m/s");
+    }
+
+    #[test]
+    fn angular_velocity_display() {
+        let av = AngularVelocity::new(0.0).unwrap();
+        assert_eq!(av.to_string(), "0.000 rad/s");
+    }
+
+    #[test]
+    fn radius_display() {
+        assert_eq!(Radius::Straight.to_string(), "straight");
+        assert_eq!(Radius::TurnInPlaceCw.to_string(), "turn-cw");
+        assert_eq!(Radius::TurnInPlaceCcw.to_string(), "turn-ccw");
+        assert_eq!(Radius::new(0.5).unwrap().to_string(), "0.500 m");
+    }
+
+    #[test]
+    fn robot_model_display() {
+        assert_eq!(CreateRobotModel::Create2.to_string(), "Create2");
+        assert_eq!(CreateRobotModel::Create1.to_string(), "Create1");
+        assert_eq!(CreateRobotModel::Roomba400.to_string(), "Roomba400");
+    }
+
+    #[test]
+    fn motor_power_display() {
+        assert_eq!(MotorPower::new(1.0).unwrap().to_string(), "1.000");
+    }
 }
