@@ -13,6 +13,9 @@ categories = ["hardware-support"]
 create-oi = { workspace = true, features = ["std"] }
 serialport.workspace = true
 
+[features]
+midi = ["create-oi/midi"]
+
 [dev-dependencies]
 create-oi = { workspace = true, features = ["std"] }
 
@@ -47,4 +50,9 @@ path = "examples/sensors_sync.rs"
 [[example]]
 name = "schedule_sync"
 path = "examples/schedule_sync.rs"
+
+[[example]]
+name = "play_midi_sync"
+path = "examples/play_midi_sync.rs"
+required-features = ["midi"]
 

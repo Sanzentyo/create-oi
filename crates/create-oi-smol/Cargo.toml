@@ -15,6 +15,9 @@ create-oi = { workspace = true, features = ["std"] }
 smol.workspace = true
 serialport.workspace = true
 
+[features]
+midi = ["create-oi/midi"]
+
 [[example]]
 name = "basic_smol"
 required-features = []
@@ -46,4 +49,8 @@ required-features = []
 [[example]]
 name = "dock_smol"
 required-features = []
+
+[[example]]
+name = "play_midi_smol"
+required-features = ["midi"]
 

@@ -14,6 +14,9 @@ create-oi = { workspace = true, features = ["std"] }
 tokio.workspace = true
 tokio-serial.workspace = true
 
+[features]
+midi = ["create-oi/midi"]
+
 [dev-dependencies]
 create-oi = { workspace = true, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -49,4 +52,9 @@ path = "examples/schedule_tokio.rs"
 [[example]]
 name = "dock_tokio"
 path = "examples/dock_tokio.rs"
+
+[[example]]
+name = "play_midi_tokio"
+path = "examples/play_midi_tokio.rs"
+required-features = ["midi"]
 

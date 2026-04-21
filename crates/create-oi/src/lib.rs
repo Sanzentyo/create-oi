@@ -58,6 +58,8 @@ pub mod async_create;
 #[cfg(feature = "std")]
 pub mod create;
 pub mod error;
+#[cfg(feature = "midi")]
+pub mod midi;
 pub mod mode;
 pub mod transport;
 pub mod types;

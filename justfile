@@ -19,6 +19,7 @@ release:
 # Run all tests (default members)
 test: build
     cargo test --workspace
+    cargo test -p create-oi --features midi
 
 # Run clippy lints on the entire workspace
 clippy:

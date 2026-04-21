@@ -13,10 +13,12 @@ categories = ["hardware-support", "embedded"]
 default = ["std"]
 std = ["alloc", "create-oi-protocol/std"]
 alloc = ["create-oi-protocol/alloc"]
+midi = ["alloc", "dep:midly"]
 
 [dependencies]
 create-oi-protocol.workspace = true
 libm = "0.2"
+midly = { version = "0.5", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

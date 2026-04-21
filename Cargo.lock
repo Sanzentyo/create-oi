@@ -555,6 +555,7 @@ version = "0.4.0"
 dependencies = [
  "create-oi-protocol",
  "libm",
+ "midly",
  "tokio",
 ]
 
@@ -1749,6 +1750,12 @@ checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "midly"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
 
 [[package]]
 name = "mio"

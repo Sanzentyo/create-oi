@@ -533,3 +533,74 @@ in Off mode.
 3. `round_sync.rs`: doc comment said "observe while cleaning" but code reclaims control; clarified
 
 **Verification:** All 9 examples compile clean under `cargo check --all-targets` and `just ci` (301 tests).
+
+---
+
+## Round 17: MIDI Feature (`create-oi/midi`)
+
+**Design reviewed by rubber-duck agent before implementation. Key findings addressed:**
+- `midi = ["alloc"]` (not `std`) — avoids forcing `std` on no_std users via feature unification
+- Global tempo map (all tracks) + piecewise integration across tempo changes
+- Reject MIDI Format 2 (sequential) explicitly
+- `u128` arithmetic for duration to prevent overflow
+- Use `create_oi_protocol::MAX_SONG_NOTES` constant instead of hardcoding 16
+
+### New crate: `create-oi/src/midi.rs` (feature-gated: `midi`)
+
+**Types:**
+- `MidiConfig { track: Option<usize>, tempo_micros_per_beat: Option<u32> }`
+- `MidiError` — `Parse` / `NoNotes` / `UnsupportedTiming` / `UnsupportedFormat` / `InvalidTiming`
+
+**Functions:**
+- `midi_to_notes(&[u8], &MidiConfig) -> Result<Vec<SongNote>, MidiError>`
+  - Parses SMF, builds global tempo map (all tracks), auto-detects melody track,
+    performs monophonic extraction (new NoteOn cuts previous note), piecewise duration
+    integration across tempo changes; drops rests (robot has no silence representation)
+- `notes_to_chunks(Vec<SongNote>) -> Vec<Vec<SongNote>>` — splits into ≤16-note chunks
+
+### Feature flags
+
+| Crate | Change |
+|-------|--------|
+| `create-oi` | `midi = ["alloc", "dep:midly"]` added; `midly` = `{ version = "0.5", default-features = false, features = ["alloc"], optional = true }` |
+| `create-oi-serial` | `midi = ["create-oi/midi"]` feature added |
+| `create-oi-tokio` | `midi = ["create-oi/midi"]` feature added |
+| `create-oi-smol` | `midi = ["create-oi/midi"]` feature added |
+| `create-oi-embassy` | Unchanged (`default-features = false`, no midi) |
+
+### Examples added (all `required-features = ["midi"]`)
+
+| Crate | File | Runtime |
+|-------|------|---------|
+| `create-oi-serial` | `play_midi_sync.rs` | sync std::thread |
+| `create-oi-tokio` | `play_midi_tokio.rs` | tokio |
+| `create-oi-smol` | `play_midi_smol.rs` | smol::block_on |
+
+### Tests added (16 new, run via `cargo test -p create-oi --features midi`)
+
+- `test_single_quarter_note_120bpm` — basic note, 120 BPM, expected 32 robot units
+- `test_noteon_vel0_acts_as_noteoff` — vel=0 NoteOn equals NoteOff
+- `test_format1_tempo_from_conductor_track` — SMF format 1 with tempo in track 0, note in track 1
+- `test_tempo_override` — MidiConfig::tempo_micros_per_beat overrides file tempo
+- `test_out_of_range_pitches_return_no_notes` — pitch < 31 → NoNotes
+- `test_out_of_range_pitches_skipped_valid_remain` — mixed valid/invalid pitches
+- `test_smpte_timing_rejected` — SMPTE header → UnsupportedTiming
+- `test_format2_rejected` — Format 2 → UnsupportedFormat
+- `test_dangling_active_note_at_end_of_track` — unclosed note; duration clamped to 1
+- `test_monophonic_cut_on_new_noteon` — chord cut to 2 sequential notes
+- `test_explicit_track_selection` — MidiConfig::track selects specific track
+- `test_chunks_single` / `test_chunks_exactly_max` / `test_chunks_over_max` / `test_chunks_empty`
+- `test_duration_very_long_clamped_to_255` — 2-beat note at 20 BPM → clamp to 255
+
+### CI update (justfile)
+
+```just
+test: build
+    cargo test --workspace
+    cargo test -p create-oi --features midi
+```
+
+### Result
+301 tests pass (`--workspace`); 62 pass with `--features midi`. no_std builds unaffected.
+Embassy crate unchanged (uses `default-features = false`).
+
