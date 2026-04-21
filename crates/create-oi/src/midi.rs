@@ -142,6 +142,21 @@ pub enum VoiceSelection {
     HighestPitch,
     /// The sounding note with the lowest MIDI pitch wins (bass voice).
     LowestPitch,
+    /// Follow the melodic contour: among all sounding notes, prefer the pitch
+    /// closest to the previously played note.
+    ///
+    /// This creates smoother melodic lines by avoiding large pitch jumps.
+    /// Ties (equal distance from previous) are broken by higher pitch.
+    /// Before any note has been played (no prior context), falls back to
+    /// [`HighestPitch`].
+    NearestPitch,
+    /// Prefer the note with the highest MIDI velocity (musical emphasis).
+    ///
+    /// When multiple notes sound simultaneously, the loudest one is selected.
+    /// Ties are broken by higher pitch. Velocity is tracked per
+    /// `(channel, pitch)` pair so overlapping notes on different channels
+    /// are handled independently.
+    HighestVelocity,
 }
 
 /// Error type for MIDI parsing.
@@ -290,13 +305,34 @@ fn ticks_to_robot_units(
 /// < true`, `NoteOff` events (is_on = false) sort before `NoteOn` events at
 /// the same tick, which ensures a clean handoff when one note ends exactly as
 /// another begins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// `velocity` does **not** participate in the sort order; see the manual
+/// `Ord` impl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NoteEvent {
     abs_tick: u64,
     /// `false` = NoteOff (sorts first at same tick); `true` = NoteOn.
     is_on: bool,
     pitch: u8,
     channel: u8,
+    /// NoteOn velocity (1–127). Zero for NoteOff events.
+    velocity: u8,
+}
+
+impl PartialOrd for NoteEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NoteEvent {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.abs_tick
+            .cmp(&other.abs_tick)
+            .then(self.is_on.cmp(&other.is_on))
+            .then(self.pitch.cmp(&other.pitch))
+            .then(self.channel.cmp(&other.channel))
+    }
 }
 
 /// Collect all NoteOn/NoteOff events from every track, optionally skipping
@@ -325,9 +361,12 @@ fn collect_note_events(
                         }
                     }
                 }
-                let (is_on, pitch) = match message {
-                    MidiMessage::NoteOn { key, vel } => (vel.as_int() > 0, key.as_int()),
-                    MidiMessage::NoteOff { key, .. } => (false, key.as_int()),
+                let (is_on, pitch, velocity) = match message {
+                    MidiMessage::NoteOn { key, vel } => {
+                        let v = vel.as_int();
+                        (v > 0, key.as_int(), v)
+                    }
+                    MidiMessage::NoteOff { key, .. } => (false, key.as_int(), 0),
                     _ => continue,
                 };
                 events.push(NoteEvent {
@@ -335,6 +374,7 @@ fn collect_note_events(
                     is_on,
                     pitch,
                     channel: ch,
+                    velocity,
                 });
             }
         }
@@ -366,6 +406,8 @@ fn monophonize_events(
     track_end_tick: u64,
 ) -> Vec<SongNote> {
     let mut active: BTreeMap<u8, u32> = BTreeMap::new(); // pitch → active count
+    // (channel, pitch) → NoteOn velocity; used by HighestVelocity.
+    let mut active_vel: BTreeMap<(u8, u8), u8> = BTreeMap::new();
     let mut current_winner: Option<u8> = None;
     let mut segment_start: u64 = 0;
     let mut last_tick: u64 = 0;
@@ -375,12 +417,27 @@ fn monophonize_events(
     let mut rest_start: Option<u64> = if include_rests { Some(0) } else { None };
     // Whether any audible note has been started yet.
     let mut first_note_started = false;
+    // For NearestPitch: the last emitted audible pitch.
+    let mut prev_pitch: Option<u8> = None;
+    // Pre-tick reference for NearestPitch: the winner before the current tick's
+    // events, so all events within the same tick use a consistent reference.
+    let mut tick_ref: Option<u8> = None;
+    // Tick of the previous event; used to detect tick advances.
+    let mut prev_event_tick: u64 = u64::MAX;
 
     for event in events {
+        // When the tick advances, record the current winner as the reference
+        // for NearestPitch, so every event at the same tick uses the same
+        // pre-tick reference rather than intermediate intra-tick states.
+        if event.abs_tick != prev_event_tick {
+            tick_ref = current_winner;
+            prev_event_tick = event.abs_tick;
+        }
         last_tick = event.abs_tick;
 
         if event.is_on {
             *active.entry(event.pitch).or_insert(0) += 1;
+            active_vel.insert((event.channel, event.pitch), event.velocity);
         } else {
             match active.get_mut(&event.pitch) {
                 Some(count) if *count > 1 => *count -= 1,
@@ -389,11 +446,29 @@ fn monophonize_events(
                 }
                 None => {} // Spurious NoteOff — ignore.
             }
+            active_vel.remove(&(event.channel, event.pitch));
         }
 
         let new_winner = match voice_selection {
             VoiceSelection::HighestPitch => active.keys().next_back().copied(),
             VoiceSelection::LowestPitch => active.keys().next().copied(),
+            VoiceSelection::NearestPitch => {
+                let reference = tick_ref.or(prev_pitch);
+                match reference {
+                    None => active.keys().next_back().copied(),
+                    Some(p) => active
+                        .keys()
+                        .min_by_key(|&&k| {
+                            let dist = (k as i16 - p as i16).unsigned_abs();
+                            (dist, u8::MAX - k) // tiebreak: higher pitch wins
+                        })
+                        .copied(),
+                }
+            }
+            VoiceSelection::HighestVelocity => active_vel
+                .iter()
+                .max_by(|(k1, v1), (k2, v2)| v1.cmp(v2).then_with(|| k1.1.cmp(&k2.1)))
+                .map(|((_, p), _)| *p),
         };
 
         if new_winner != current_winner {
@@ -405,6 +480,7 @@ fn monophonize_events(
                         make_note(pitch, segment_start, dur, tempo_map, ticks_per_beat)
                     {
                         notes.push(note);
+                        prev_pitch = Some(pitch); // for NearestPitch contour tracking
                         // Audible note ended; silence starts here.
                         if include_rests {
                             rest_start = Some(event.abs_tick);
@@ -1775,5 +1851,164 @@ mod tests {
         assert!(notes[1].is_rest());
         assert_eq!(notes[1].duration_64ths(), 32);
         assert_eq!(notes[2].midi_note(), 64); // E4
+    }
+
+    // ── VoiceSelection::NearestPitch ─────────────────────────────────────────
+
+    #[test]
+    fn test_nearest_pitch_prefers_closer_note() {
+        // Single track, two channels.
+        // ch0: C4(60) tick 0–120, then A3(57) tick 120–240.
+        // ch1: E4(64) tick 120–240.
+        //
+        // With NearestPitch: after C4 plays, reference = 60.
+        // At tick 120: |57-60|=3 vs |64-60|=4 → A3 wins.
+        // Expected output: [C4, A3].
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], // Tempo
+            0x00, 0x90, 60, 64, // tick   0: ch0 NoteOn C4 vel=64
+            0x78, 0x80, 60, 0, // tick 120: ch0 NoteOff C4
+            0x00, 0x90, 57, 64, // tick 120: ch0 NoteOn A3 vel=64
+            0x00, 0x91, 64, 64, // tick 120: ch1 NoteOn E4 vel=64
+            0x78, 0x80, 57, 0, // tick 240: ch0 NoteOff A3
+            0x00, 0x81, 64, 0, // tick 240: ch1 NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::NearestPitch,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].midi_note(), 60); // C4
+        assert_eq!(notes[1].midi_note(), 57); // A3 (nearest to C4)
+    }
+
+    #[test]
+    fn test_nearest_pitch_equal_distance_tiebreak_higher_wins() {
+        // C4(60) then F#3(54) and F#4(66) simultaneously at tick 120.
+        // |54-60| = 6, |66-60| = 6: equal distance → higher pitch (F#4=66) wins.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60,
+            64, // tick   0: NoteOn C4 ch0
+            0x78, 0x80, 60, 0, // tick 120: NoteOff C4 ch0
+            0x00, 0x90, 54, 64, // tick 120: NoteOn F#3 ch0
+            0x00, 0x91, 66, 64, // tick 120: NoteOn F#4 ch1
+            0x78, 0x80, 54, 0, // tick 240: NoteOff F#3
+            0x00, 0x81, 66, 0, // tick 240: NoteOff F#4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::NearestPitch,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].midi_note(), 60); // C4
+        assert_eq!(notes[1].midi_note(), 66); // F#4 (equal dist, higher pitch wins)
+    }
+
+    #[test]
+    fn test_nearest_pitch_no_prior_context_falls_back_to_highest() {
+        // No prior note: NearestPitch falls back to HighestPitch.
+        // C4(60) and E4(64) from tick 0 simultaneously — E4 should win.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60,
+            64, // tick 0: NoteOn C4 ch0
+            0x00, 0x91, 64, 64, // tick 0: NoteOn E4 ch1
+            0x78, 0x80, 60, 0, // tick 120: NoteOff C4
+            0x00, 0x81, 64, 0, // tick 120: NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::NearestPitch,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 64); // E4 (HighestPitch fallback)
+    }
+
+    // ── VoiceSelection::HighestVelocity ──────────────────────────────────────
+
+    #[test]
+    fn test_highest_velocity_louder_note_wins() {
+        // C4 vel=40 and E4 vel=80 simultaneously: E4 wins.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60,
+            40, // tick 0: ch0 NoteOn C4 vel=40
+            0x00, 0x91, 64, 80, // tick 0: ch1 NoteOn E4 vel=80
+            0x78, 0x80, 60, 0, // tick 120: NoteOff C4
+            0x00, 0x81, 64, 0, // tick 120: NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::HighestVelocity,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 64); // E4 (louder)
+    }
+
+    #[test]
+    fn test_highest_velocity_equal_velocity_higher_pitch_wins() {
+        // C4 vel=64 and E4 vel=64 simultaneously: equal velocity → higher pitch wins.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60,
+            64, // tick 0: ch0 NoteOn C4 vel=64
+            0x00, 0x91, 64, 64, // tick 0: ch1 NoteOn E4 vel=64
+            0x78, 0x80, 60, 0, // tick 120: NoteOff C4
+            0x00, 0x81, 64, 0, // tick 120: NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::HighestVelocity,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 64); // E4 (equal vel, higher pitch wins)
+    }
+
+    #[test]
+    fn test_highest_velocity_softer_note_still_visible_when_loud_ends() {
+        // C4 vel=80 from tick 0–120 (louder, wins while both active).
+        // E4 vel=40 from tick 0–180 (continues after C4 ends).
+        // Expected: C4 wins during 0–120; E4 plays alone from 120–180.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 60,
+            80, // tick   0: ch0 NoteOn C4 vel=80
+            0x00, 0x91, 64, 40, // tick   0: ch1 NoteOn E4 vel=40
+            0x78, 0x80, 60, 0, // tick 120: ch0 NoteOff C4
+            0x3C, 0x81, 64, 0, // tick 180: ch1 NoteOff E4 (delta=60=0x3C)
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            voice_selection: VoiceSelection::HighestVelocity,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].midi_note(), 60); // C4 wins while both active
+        assert_eq!(notes[1].midi_note(), 64); // E4 plays alone after C4 ends
     }
 }

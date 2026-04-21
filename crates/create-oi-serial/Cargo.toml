@@ -21,36 +21,36 @@ create-oi = { workspace = true, features = ["std"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
 [[example]]
-name = "basic_sync"
-path = "examples/basic_sync.rs"
+name = "basic"
+path = "examples/basic.rs"
 
 [[example]]
-name = "dock_sync"
-path = "examples/dock_sync.rs"
+name = "dock"
+path = "examples/dock.rs"
 
 [[example]]
-name = "leds_sync"
-path = "examples/leds_sync.rs"
+name = "leds"
+path = "examples/leds.rs"
 
 [[example]]
-name = "songs_sync"
-path = "examples/songs_sync.rs"
+name = "songs"
+path = "examples/songs.rs"
 
 [[example]]
-name = "full_sync"
-path = "examples/full_sync.rs"
+name = "full"
+path = "examples/full.rs"
 
 [[example]]
-name = "stream_sync"
-path = "examples/stream_sync.rs"
+name = "stream"
+path = "examples/stream.rs"
 
 [[example]]
-name = "sensors_sync"
-path = "examples/sensors_sync.rs"
+name = "sensors"
+path = "examples/sensors.rs"
 
 [[example]]
-name = "schedule_sync"
-path = "examples/schedule_sync.rs"
+name = "schedule"
+path = "examples/schedule.rs"
 
 [[example]]
 name = "play_midi"

@@ -1079,3 +1079,54 @@ Gap reduced from **fixed 22 ms** to **OI sensor cadence (~15.6 ms) + query round
 - `cargo test --workspace`: 307 tests passed
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean
 - `just check-nostd`: all 4 no_std / embedded builds pass
+
+## Round 28 — Voice Reduction + Example Renaming
+
+### Example file renaming
+
+All transport-specific examples (serial/tokio/smol) had the transport suffix removed from
+their filenames so they are simply named by function:
+
+- `basic_sync.rs` → `basic.rs`, `dock_sync.rs` → `dock.rs`, etc. (serial)
+- `basic_tokio.rs` → `basic.rs`, etc. (tokio)
+- `basic_smol.rs` → `basic.rs`, etc. (smol)
+
+`Cargo.toml` `[[example]]` entries updated to match.
+
+### MIDI voice reduction — NearestPitch and HighestVelocity
+
+Added two new `VoiceSelection` variants in `crates/create-oi/src/midi.rs`:
+
+- **`NearestPitch`**: When multiple notes sound simultaneously, picks the note whose pitch is
+  closest to the previous played note. Falls back to `HighestPitch` when no prior note
+  exists. Uses per-tick reference grouping (snapshot before processing each new tick) so
+  that the reference pitch is consistent for all events within the same tick, eliminating
+  order-sensitivity.
+- **`HighestVelocity`**: Picks the note with the highest NoteOn velocity. Tracks velocity
+  per `(channel, pitch)` pair in a `BTreeMap` so that when individual notes expire their
+  entries are removed accurately.
+
+Also added `velocity: u8` to `NoteEvent` with a manual `Ord` impl that excludes velocity
+from sort order (preserving stable sort by tick, is_on, pitch, channel).
+
+### CLI: `--voice` option for play_midi examples
+
+All three `play_midi` examples now accept `--voice` (short `-v`) to choose the voice
+selection strategy when `--merge-tracks` is active:
+
+```
+--voice highest   (default) highest pitch wins
+--voice lowest    lowest pitch wins
+--voice nearest   nearest pitch to previous note wins
+--voice velocity  highest NoteOn velocity wins
+```
+
+A `VoiceArg` clap `ValueEnum` is defined locally in each example and converted to
+`VoiceSelection` via `From<VoiceArg>`.
+
+### Test results
+
+- `cargo test --workspace`: 308 tests passed
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean
+- `cargo fmt --all`: applied
+- `just check-nostd`: all 4 no_std / embedded builds pass

@@ -22,35 +22,35 @@ midi = ["create-oi/midi"]
 clap = { version = "4.6.1", features = ["derive"] }
 
 [[example]]
-name = "basic_smol"
+name = "basic"
 required-features = []
 
 [[example]]
-name = "stream_smol"
+name = "stream"
 required-features = []
 
 [[example]]
-name = "leds_smol"
+name = "leds"
 required-features = []
 
 [[example]]
-name = "songs_smol"
+name = "songs"
 required-features = []
 
 [[example]]
-name = "full_smol"
+name = "full"
 required-features = []
 
 [[example]]
-name = "sensors_smol"
+name = "sensors"
 required-features = []
 
 [[example]]
-name = "schedule_smol"
+name = "schedule"
 required-features = []
 
 [[example]]
-name = "dock_smol"
+name = "dock"
 required-features = []
 
 [[example]]

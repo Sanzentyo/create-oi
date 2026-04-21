@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use create_oi::midi::{
     MidiConfig, VoiceSelection, midi_initial_tempo, midi_to_notes, notes_to_chunks,
 };
@@ -27,6 +27,27 @@ const SONG_POLL_EARLY: Duration = Duration::from_millis(50);
 
 /// How long past the expected chunk end before we give up waiting and advance.
 const SONG_POLL_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// CLI voice selection policy (maps to [`VoiceSelection`]).
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum VoiceArg {
+    #[default]
+    Highest,
+    Lowest,
+    Nearest,
+    Velocity,
+}
+
+impl From<VoiceArg> for VoiceSelection {
+    fn from(v: VoiceArg) -> Self {
+        match v {
+            VoiceArg::Highest => VoiceSelection::HighestPitch,
+            VoiceArg::Lowest => VoiceSelection::LowestPitch,
+            VoiceArg::Nearest => VoiceSelection::NearestPitch,
+            VoiceArg::Velocity => VoiceSelection::HighestVelocity,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,9 +69,13 @@ struct Args {
     #[arg(short = 'C', long, value_parser = clap::value_parser!(u8).range(0..=15))]
     channel: Option<u8>,
 
-    /// Merge all tracks into one monophonic voice (highest pitch wins)
+    /// Merge all tracks into one monophonic voice (highest pitch wins by default)
     #[arg(short = 'm', long)]
     merge_tracks: bool,
+
+    /// Voice selection strategy when merging tracks (requires --merge-tracks)
+    #[arg(short = 'v', long, value_enum, default_value = "highest")]
+    voice: VoiceArg,
 
     /// Omit silence gaps between notes (suppress pitch-0 rest notes)
     #[arg(long)]
@@ -129,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config = MidiConfig {
             merge_all_tracks: args.merge_tracks,
             tempo_micros_per_beat: tempo_override,
-            voice_selection: VoiceSelection::HighestPitch,
+            voice_selection: args.voice.into(),
             channel: args.channel,
             include_rests: !args.no_rests,
             trim_start: !args.keep_start_silence,
