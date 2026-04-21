@@ -787,3 +787,51 @@ pub struct MidiConfig {
 - `crates/create-oi-serial/examples/play_midi_sync.rs` — use `merge_all_tracks: true`
 - `crates/create-oi-tokio/examples/play_midi_tokio.rs` — same
 - `crates/create-oi-smol/examples/play_midi_smol.rs` — same
+
+---
+
+## Round 22 — Remove double-buffer from MIDI examples
+
+### Root cause of "every other chunk inaudible"
+
+The OI specification states that `play_song` is **ignored** while a song is
+already playing. The double-buffer strategy issued `play_song(next_slot)` at
+the calculated moment the current chunk should end. However, OS sleep jitter
+(±2 ms on macOS) plus USB-to-serial latency (1–3 ms) often caused the command
+to arrive 1–3 ms early — before the robot had finished the current chunk —
+resulting in the command being silently dropped.
+
+Pattern: chunks 0, 2, 4, … (odd-numbered transitions) audible; chunks 1, 3,
+5, … (even-numbered transitions) dropped.
+
+### Fix: single-slot sequential playback
+
+All three examples (`play_midi_sync`, `play_midi_tokio`, `play_midi_smol`)
+replaced with a simple loop:
+
+```rust
+let slot = SongNumber::new(0)?;
+for chunk in &chunks {
+    create.define_song(slot, chunk)?;  // ~2 ms write
+    create.play_song(slot)?;           // starts playback
+    let play_start = Instant::now();
+    // sleep until chunk finishes (+ 3 ms buffer)
+    let elapsed = play_start.elapsed();
+    if dur + BUFFER > elapsed { sleep(dur + BUFFER - elapsed); }
+}
+```
+
+`play_song` is only ever issued after the previous sleep guarantees the prior
+chunk has ended → never ignored.
+
+### Trade-off
+
+* Inter-chunk gap: ~5 ms (`define_song` write + `SONG_TIMING_BUFFER`)  
+  vs double-buffer theoretical: ~1 ms  
+* Reliability: deterministic vs timing-dependent
+
+### Files changed
+
+- `crates/create-oi-serial/examples/play_midi_sync.rs`
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs`
+- `crates/create-oi-smol/examples/play_midi_smol.rs`
