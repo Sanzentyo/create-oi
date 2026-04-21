@@ -1,8 +1,7 @@
 //! Play a MIDI file on the robot using `SmolTransport`.
 //!
-//! See `play_midi_sync` for a full explanation of the sequential playback
-//! strategy.  This variant uses smol async I/O and `smol::Timer::after`
-//! for the chunk-duration wait.
+//! See `create-oi-serial`'s `play_midi` for a full description of the
+//! double-buffer playback strategy.  This variant uses smol async I/O.
 //!
 //! # Usage
 //!
@@ -20,9 +19,14 @@ use create_oi::midi::{
 use create_oi::prelude::*;
 use create_oi_smol::SmolTransport;
 
-/// See `play_midi_sync` for rationale.  macOS USB-serial latency is typically
-/// ≤10 ms; 20 ms provides a 2× margin.
-const SONG_TIMING_BUFFER: Duration = Duration::from_millis(20);
+/// Poll interval when waiting for `SONG_PLAYING` (packet 37) to go false.
+const SONG_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+/// Switch from sleeping to polling this long before the expected chunk end.
+const SONG_POLL_EARLY: Duration = Duration::from_millis(50);
+
+/// How long past the expected chunk end before we give up waiting and advance.
+const SONG_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -68,6 +72,34 @@ fn chunk_duration(chunk: &[SongNote]) -> Duration {
             .map(|note: &SongNote| u64::from(note.duration_64ths()) * 15_625)
             .sum::<u64>(),
     )
+}
+
+fn print_chunk_info(i: usize, n: usize, chunk: &[SongNote]) {
+    let dur = chunk_duration(chunk);
+    let pitch_min = chunk
+        .iter()
+        .filter(|note| !note.is_rest())
+        .map(|note| note.midi_note())
+        .min()
+        .unwrap_or(0);
+    let pitch_max = chunk
+        .iter()
+        .filter(|note| !note.is_rest())
+        .map(|note| note.midi_note())
+        .max()
+        .unwrap_or(0);
+    let rest_count = chunk.iter().filter(|note| note.is_rest()).count();
+    println!(
+        "Chunk {}/{}: slot={} notes={} rests={} dur={:.3}s pitches={}..{}",
+        i + 1,
+        n,
+        i % 2,
+        chunk.len() - rest_count,
+        rest_count,
+        dur.as_secs_f64(),
+        pitch_min,
+        pitch_max,
+    );
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,43 +155,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let slots = [SongNumber::new(0)?, SongNumber::new(1)?];
 
-        for (i, chunk) in chunks.iter().enumerate() {
-            let slot = slots[i % 2];
-            let dur = chunk_duration(chunk);
-            let pitch_min = chunk
-                .iter()
-                .filter(|n| !n.is_rest())
-                .map(|n| n.midi_note())
-                .min()
-                .unwrap_or(0);
-            let pitch_max = chunk
-                .iter()
-                .filter(|n| !n.is_rest())
-                .map(|n| n.midi_note())
-                .max()
-                .unwrap_or(0);
-            let rest_count = chunk.iter().filter(|n| n.is_rest()).count();
-            println!(
-                "Chunk {}/{}: slot={} notes={} rests={} dur={:.3}s pitches={}..{}",
-                i + 1,
-                n,
-                i % 2,
-                chunk.len() - rest_count,
-                rest_count,
-                dur.as_secs_f64(),
-                pitch_min,
-                pitch_max,
-            );
+        // Double-buffer setup: pre-load the first two chunks before starting playback.
+        create.define_song(slots[0], &chunks[0]).await?;
+        if n > 1 {
+            create.define_song(slots[1], &chunks[1]).await?;
+        }
 
-            create.define_song(slot, chunk).await?;
-            create.play_song(slot).await?;
-            let play_start = Instant::now();
+        print_chunk_info(0, n, &chunks[0]);
+        create.play_song(slots[0]).await?;
+        let mut play_start = Instant::now();
+        let mut playing_i = 0usize;
 
-            let target = dur + SONG_TIMING_BUFFER;
-            let elapsed = play_start.elapsed();
-            if target > elapsed {
-                smol::Timer::after(target - elapsed).await;
+        loop {
+            let dur = chunk_duration(&chunks[playing_i]);
+
+            // Sleep until SONG_POLL_EARLY before expected end to reduce serial traffic.
+            let approach_at = play_start + dur.saturating_sub(SONG_POLL_EARLY);
+            let now = Instant::now();
+            if now < approach_at {
+                smol::Timer::after(approach_at - now).await;
             }
+
+            // Poll SONG_PLAYING until the robot reports playback stopped.
+            let timeout_at = play_start + dur + SONG_POLL_TIMEOUT;
+            let mut saw_playing = false;
+            loop {
+                match create.query_sensor(37).await {
+                    Ok(sd) => {
+                        let playing = sd.song_playing.unwrap_or(false);
+                        saw_playing |= playing;
+                        if !playing && (saw_playing || play_start.elapsed() >= dur) {
+                            break;
+                        }
+                    }
+                    Err(e) => eprintln!(
+                        "Warning: sensor query failed during chunk {}: {e}",
+                        playing_i + 1
+                    ),
+                }
+                if Instant::now() >= timeout_at {
+                    eprintln!(
+                        "Warning: chunk {} timed out waiting for song end; advancing",
+                        playing_i + 1
+                    );
+                    break;
+                }
+                smol::Timer::after(SONG_POLL_INTERVAL).await;
+            }
+
+            let next_i = playing_i + 1;
+            if next_i >= n {
+                break;
+            }
+
+            // Immediately start the next chunk — already pre-loaded, so only
+            // a 2-byte play_song command is needed (≈ 0.2 ms latency).
+            print_chunk_info(next_i, n, &chunks[next_i]);
+            create.play_song(slots[next_i % 2]).await?;
+            play_start = Instant::now();
+
+            // While the next chunk plays, pre-load the one after it into the now-free slot.
+            let after_next_i = playing_i + 2;
+            if after_next_i < n {
+                create
+                    .define_song(slots[playing_i % 2], &chunks[after_next_i])
+                    .await?;
+            }
+
+            playing_i = next_i;
         }
 
         let _create = create.to_passive().await.map_err(|e| e.source)?;
