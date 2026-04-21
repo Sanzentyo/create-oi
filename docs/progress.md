@@ -239,3 +239,42 @@ in Off mode.
 
 ### Result
 186 tests pass (41 unit + 45 sync + 44 async + 56 protocol). CI green.
+
+---
+
+## Round 10 — OI spec mode-transition fixes (commit `d2e15bc`)
+
+**Trigger:** rubber-duck OI audit round 2 (HIGH/MEDIUM findings)
+
+### Changes
+
+- **`cleared_transition()` helper** — new internal helper in `Create`/`AsyncCreate`
+  that resets `streaming=false` and `stream_parser=StreamParser::new()` when
+  transitioning across OI session boundaries
+- **`to_off()` model gate** (sync + async, Passive/Safe/Full = 6 impls):
+  rejects Create 1 and Roomba 400 with `ValidationError` before sending any bytes;
+  now uses `cleared_transition()` instead of `transition()` to reset stream state
+- **`power_off()` return type** changed from `Result<T, ...>` to
+  `Result<Create<Passive, T>, ...>` (sync + async): POWER (opcode 133) puts the
+  robot into Passive charging mode, not Off; stream state cleared via
+  `cleared_transition()`
+- **`clean()` / `seek_dock()` moved to `Create<Passive, T>` only** (sync + async):
+  per OI spec, CLEAN/SPOT/MAX/DOCK commands are valid in Passive mode only; removed
+  from the `SensorReadable` impl block
+- **`set_date()` / `set_schedule()` moved from `FullControl` to `SensorReadable`**
+  (sync + async): per OI spec, SET_DAY_TIME (168) and SCHEDULE (167) are available
+  in Passive, Safe, and Full modes; `simulate_buttons()` remains `FullControl`-only
+
+### Tests added (26 new)
+
+- `to_off_rejects_create1/roomba400_before_send_from_passive/safe/full` (×8 sync+async)
+- `to_off_succeeds_on_create2_sends_stop_opcode` (sync + async = 2)
+- `power_off_returns_passive_handle` (sync + async = 2)
+- `power_off_clears_streaming_state` (sync + async = 2)
+- `set_date_available_in_passive/safe_mode` (sync + async = 4)
+- `set_schedule_available_in_passive/safe_mode` (sync + async = 4)
+- `clean_available_in_passive_mode` (sync + async = 2)
+- `seek_dock_available_in_passive_mode` (sync + async = 2)
+
+### Result
+212 tests pass (41 unit + 57 sync + 58 async + 56 protocol). CI green.
