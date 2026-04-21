@@ -917,3 +917,65 @@ Files changed:
 - `crates/create-oi-serial/examples/play_midi_sync.rs`
 - `crates/create-oi-tokio/examples/play_midi_tokio.rs`
 - `crates/create-oi-smol/examples/play_midi_smol.rs`
+
+## Round 25 — MIDI rest/silence support + clap CLI examples
+
+### Goal
+
+Add rest/silence note support (pitch = 0) to the MIDI pipeline, with
+configurable trim options, and rewrite the three MIDI example CLIs using
+`clap` with `#[derive(Parser)]`.
+
+### Changes
+
+#### `SongNote` (types.rs)
+- `pitch = 0` now accepted: validation changed to reject only `1..=30` and
+  `128..=255`; pitch 0 is the firmware-accepted "silence for duration" note
+- Added `SongNote::rest(duration_64ths: u8)` constructor
+- Added `SongNote::is_rest(self) -> bool` predicate
+
+#### `MidiConfig` (midi.rs) — new fields
+- `include_rests: bool` (default: false) — emit pitch-0 rest notes for
+  silence gaps between audible notes
+- `trim_start: bool` (default: true) — suppress leading silence before the
+  first audible note (only effective when `include_rests = true`)
+- `trim_end: bool` (default: true) — suppress trailing silence after the
+  last audible note
+
+#### Internal MIDI functions
+- `single_track_notes`: full rest tracking with `gap_start`, out-of-range
+  spans treated as silence, `first_audible_started` flag for leading trim
+- `monophonize_events`: same rest/trim semantics, `rest_start` state machine,
+  out-of-range winner treated as silence
+- `make_rest()`: new helper with explicit `dur_ticks == 0` guard (avoids
+  `ticks_to_robot_units` clamping zero to 1)
+- `find_max_track_end_tick()`: new helper for trailing rest calculation
+  (uses EndOfTrack meta tick; falls back to last event abs_tick)
+
+#### MIDI examples (all three: serial/tokio/smol)
+Rewritten from positional `env::args()` to `clap` `#[derive(Parser)]`:
+- `--bpm (-b)` with `value_parser!(u32).range(1..)` — prevents div-by-zero
+- `--channel (-C)` with `value_parser!(u8).range(0..=15)` — validated range
+- `--merge-tracks (-m)` — merge all tracks into one voice
+- `--include-rests (-r)` — enable rest note generation
+- `--keep-start-silence` — disable `trim_start`
+- `--keep-end-silence` — disable `trim_end`
+- Chunk debug log now shows `notes=N rests=M` separately, filtering out
+  rest notes from pitch min/max range display
+
+#### Dependencies
+- `clap = { version = "4.6.1", features = ["derive"] }` added as
+  `[dev-dependencies]` in `create-oi-serial`, `create-oi-tokio`, `create-oi-smol`
+
+### Tests added (midi.rs)
+- `test_include_rests_basic` — gap becomes rest note
+- `test_include_rests_false_unchanged` — backward compat (default no rests)
+- `test_trim_start_suppresses_leading_rest` — leading silence trimmed
+- `test_no_trim_start_emits_leading_rest` — leading silence emitted
+- `test_trim_end_suppresses_trailing_rest` — trailing silence trimmed
+- `test_no_trim_end_emits_trailing_rest` — trailing silence emitted
+- `test_note_at_tick_zero_no_spurious_rest` — zero-duration rest not emitted
+- `test_out_of_range_span_treated_as_rest` — pitch 20 span becomes rest
+- `test_merge_include_rests_basic` — merge mode rest generation
+
+Total tests: 316+ (40 MIDI unit tests, up from 31)
