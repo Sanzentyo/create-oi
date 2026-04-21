@@ -178,3 +178,27 @@
 - Total: **168 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅ | commit `9dfe1b7`
 
 ### Remaining
+
+## Round 8 — Transport trait cleanup (commit 1a76d44)
+
+### Goal
+Evaluate and implement TypeState for the Transport layer.
+
+### Decision
+After rubber-duck review, full TypeState for `SerialTransport<Open/Closed>` was
+rejected as over-engineering. Key reasons:
+- `SerialTransport<Closed>` has nowhere to store the dropped port, forcing `Option<Box>` back
+- TypeState only benefits users who call `into_transport()` — a narrow surface area
+- Async transports already have no `close()`, making TypeState asymmetric
+
+### Changes
+- **Removed `fn close(&mut self)`** from `Transport` trait — brings sync/async into
+  consistency; port closes on `Drop` (idiomatic Rust)
+- **Reverted `Option<Box<dyn SerialPort>>`** back to `Box<dyn SerialPort>` in
+  `SerialTransport` — the Option complexity was only needed for the old `close()` pattern
+- **Added inherent `SerialTransport::close(self) -> io::Result<()>`** — consuming
+  method for explicit flush-before-drop; not part of the trait
+- **Removed `fn close(&mut self)`** from `MockTransport` test implementation
+
+### Result
+168 tests pass, CI green. Transport API is now simpler and consistent with `AsyncTransport`.
