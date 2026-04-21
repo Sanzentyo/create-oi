@@ -737,3 +737,53 @@ playing (which would interrupt the tail of the current chunk).
 On macOS USB-to-serial: **minimum achievable gap ≈ 1–5 ms** (OS timer jitter).
 For guaranteed sub-millisecond gaps, a direct UART (e.g., Raspberry Pi GPIO)
 or an FTDI chip with its latency timer set to 1 ms would be required.
+
+---
+
+## Round 21 — MIDI Monophonization (sweep-line)
+
+### Root cause confirmed
+
+`ssg_17.mid` produced 656 song chunks (10 496 notes, all `duration_64ths=1 =
+15.625 ms`) because the auto-detected single track had rapid polyphonic NoteOn
+events. Each new NoteOn cut the previous note at the point of arrival, turning
+every simultaneous chord change into a 1-unit fragment.
+
+### Solution: multi-track sweep-line monophonization
+
+Added `MidiConfig::merge_all_tracks: bool` (default `false`, fully backwards
+compatible). When `true`:
+
+1. **All** MIDI tracks are scanned for NoteOn/NoteOff events.
+2. Events are sorted by `(abs_tick, is_off, pitch, channel)` — NoteOff sorts
+   before NoteOn at the same tick for clean note handoffs.
+3. A sweep-line maintains a `BTreeMap<pitch, count>` of sounding notes.
+4. At every state change the highest (or lowest, via `VoiceSelection`) pitch is
+   compared to the previous winner; if it changed, the previous segment is
+   emitted as a `SongNote`.
+5. Zero-duration segments (two NoteOns at the same tick) are silently discarded.
+6. Same-pitch overlapping notes from different tracks are handled by reference
+   counting; they merge into a single longer note automatically.
+
+### New API surface
+
+```rust
+pub enum VoiceSelection { HighestPitch, LowestPitch }
+
+pub struct MidiConfig {
+    pub merge_all_tracks: bool,           // false = old single-track mode
+    pub voice_selection: VoiceSelection,  // HighestPitch (default)
+    pub filter_percussion: bool,          // true = skip MIDI channel 10
+    // existing fields unchanged
+    pub track: Option<usize>,
+    pub tempo_micros_per_beat: Option<u32>,
+}
+```
+
+### Files changed
+
+- `crates/create-oi/src/midi.rs` — new types, `collect_note_events`,
+  `monophonize_events`, `single_track_notes`; 7 new unit tests
+- `crates/create-oi-serial/examples/play_midi_sync.rs` — use `merge_all_tracks: true`
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs` — same
+- `crates/create-oi-smol/examples/play_midi_smol.rs` — same

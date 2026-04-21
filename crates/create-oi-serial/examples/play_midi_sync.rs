@@ -75,7 +75,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading {path}…");
     let bytes = std::fs::read(&path)?;
 
-    let notes = midi_to_notes(&bytes, &MidiConfig::default())?;
+    let notes = midi_to_notes(
+        &bytes,
+        &MidiConfig {
+            merge_all_tracks: true,
+            ..MidiConfig::default()
+        },
+    )?;
     println!("{} notes parsed from MIDI file", notes.len());
     let chunks = notes_to_chunks(notes);
     let n = chunks.len();
