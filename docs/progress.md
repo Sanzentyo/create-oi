@@ -693,3 +693,47 @@ a 6.6× improvement. For 0.25 s chunks: ~2% silence instead of ~13%.
 - `n == 0`: early return before opening serial port
 - `n == 1`: no preloaded_slot setup, no swap
 - `i + 2 >= n`: skip `define_song` pre-load (nothing left to pre-load)
+
+## Round 20 — MIDI Root-Cause Analysis & Time-Based Fix
+
+### Root Cause (confirmed via parallel agent investigation)
+
+Two independent agents (explore + rubber-duck) identified the same root cause:
+
+1. **macOS USB-to-serial driver buffers `read()` data for 10–20 ms** in the kernel
+   before delivering it to userspace — regardless of poll interval.  Each
+   `query_sensor` round-trip therefore has ~10–20 ms of irreducible latency.
+
+2. **OI sensor refresh rate = 15 ms** (64 Hz).  Polling at 5 ms was illusory;
+   the sensor value can only change every ~15.625 ms anyway.
+
+3. **`play_song` interrupts**: confirmed by the OI specification — sending
+   `play_song` while a song is already playing immediately interrupts the
+   current song and starts the new one.  There is no queue.  This rules out
+   the "burst window" strategy (sending play_song slightly before expected end
+   would cut off the current chunk).
+
+### Solution: time-based chunk transitions (no polling)
+
+- Record `Instant::now()` immediately after each `play_song` call.
+- Sleep for `chunk_duration + SONG_TIMING_BUFFER (3 ms)`.
+- On wakeup, swap slots and immediately `play_song(preloaded_slot)`.
+- `define_song(free_slot, chunks[i+2])` runs during the new chunk's playback.
+
+Expected gap = sleep jitter (±2 ms) + serial write (~1 ms) ≈ **1–5 ms** vs
+**10–30 ms** with polling.
+
+The 3 ms buffer ensures `play_song` never arrives while the robot is still
+playing (which would interrupt the tail of the current chunk).
+
+### Files changed
+
+- `crates/create-oi-serial/examples/play_midi_sync.rs` — time-based, no polling
+- `crates/create-oi-tokio/examples/play_midi_tokio.rs` — same; fix `std::fs::read`
+- `crates/create-oi-smol/examples/play_midi_smol.rs` — same
+
+### Hardware/OS limits
+
+On macOS USB-to-serial: **minimum achievable gap ≈ 1–5 ms** (OS timer jitter).
+For guaranteed sub-millisecond gaps, a direct UART (e.g., Raspberry Pi GPIO)
+or an FTDI chip with its latency timer set to 1 ms would be required.
