@@ -4,26 +4,41 @@
 //! plays them sequentially through the robot's built-in speaker.
 //!
 //! Songs are uploaded in chunks of up to 16 notes (the OI limit per song
-//! slot).  Slot 0 is reused for every chunk; the task sleeps between chunks
-//! to let the robot finish playing each one.
+//! slot).  Slot 0 is reused for every chunk; the task polls the `SONG_PLAYING`
+//! sensor (packet 37) to know when each chunk has finished, rather than using
+//! a fixed timer.
 //!
 //! # Usage
 //!
 //! ```text
-//! cargo run --example play_midi_smol --features midi -- /dev/ttyUSB0 song.mid
+//! cargo run --example play_midi_smol --features midi -- /dev/ttyUSB0 [song.mid]
 //! ```
+//!
+//! When no MIDI path is given the bundled CC0 demo file
+//! (`assets/midi/game-over.mid`) is used.
 
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_smol::SmolTransport;
 
+/// How often to poll `SONG_PLAYING` while waiting for a chunk to finish.
+const SONG_POLL_INTERVAL: Duration = Duration::from_millis(30);
+/// Extra timeout headroom added on top of the expected chunk duration.
+const SONG_TIMEOUT_EXTRA: Duration = Duration::from_secs(2);
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {
         let port = env::args().nth(1).unwrap_or_else(|| "/dev/ttyUSB0".into());
-        let path = env::args().nth(2).unwrap_or_else(|| "song.mid".into());
+        let path = env::args().nth(2).unwrap_or_else(|| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/midi/game-over.mid"
+            )
+            .into()
+        });
 
         println!("Reading {path}…");
         let bytes = smol::fs::read(&path).await?;
@@ -42,22 +57,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let slot = SongNumber::new(0)?;
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let duration_ms: u64 = chunk
-                .iter()
-                .map(|n| u64::from(n.duration_64ths()) * 1000 / 64)
-                .sum();
+            // Exact duration: each robot unit = 1/64 s = 15 625 µs.
+            let chunk_duration = Duration::from_micros(
+                chunk
+                    .iter()
+                    .map(|n| u64::from(n.duration_64ths()) * 15_625)
+                    .sum::<u64>(),
+            );
 
             println!(
-                "Playing chunk {}/{} ({} notes, ~{}ms)…",
+                "Chunk {}/{}: {} notes, {:.2}s",
                 i + 1,
                 chunks.len(),
                 chunk.len(),
-                duration_ms
+                chunk_duration.as_secs_f64()
             );
 
             create.define_song(slot, chunk).await?;
             create.play_song(slot).await?;
-            smol::Timer::after(Duration::from_millis(duration_ms + 100)).await;
+
+            // Poll SONG_PLAYING (packet 37) until the robot signals it has finished.
+            let started = Instant::now();
+            let mut saw_playing = false;
+            loop {
+                let sensor = create.query_sensor(37).await?;
+                match sensor.song_playing {
+                    Some(true) => saw_playing = true,
+                    Some(false) if saw_playing || started.elapsed() >= chunk_duration => break,
+                    _ => {}
+                }
+                if started.elapsed() >= chunk_duration + SONG_TIMEOUT_EXTRA {
+                    eprintln!(
+                        "Warning: timed out waiting for chunk {}/{}",
+                        i + 1,
+                        chunks.len()
+                    );
+                    break;
+                }
+                smol::Timer::after(SONG_POLL_INTERVAL).await;
+            }
         }
 
         let _create = create.to_passive().await.map_err(|e| e.source)?;

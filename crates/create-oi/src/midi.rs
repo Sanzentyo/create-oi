@@ -21,7 +21,7 @@
 //! use create_oi::midi::{midi_to_notes, notes_to_chunks, MidiConfig};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let bytes = std::fs::read("song.mid")?;
+//! let bytes = std::fs::read("assets/midi/game-over.mid")?;
 //! let notes = midi_to_notes(&bytes, &MidiConfig::default())?;
 //! println!("{} notes parsed", notes.len());
 //! let chunks = notes_to_chunks(notes);
