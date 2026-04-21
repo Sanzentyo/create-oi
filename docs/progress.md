@@ -151,4 +151,13 @@
 - 1 protocol doc test
 - Total: **163 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅ | `just check-nostd` ✅ | commit `0cdc873`
 
+- [x] **Naming cleanup — `robot` → `create`** (aligning with libcreate's `class RobotModel` terminology):
+  - **Type rename**: `CreateRobotModel` → `RobotModel`; deprecated alias `type CreateRobotModel = RobotModel` retained in `types.rs` (not in prelude)
+  - **Field rename**: `TransitionError::robot` → `TransitionError::create`
+  - **File renames**: `tests/mock_robot.rs` → `tests/mock_create.rs`, `tests/mock_async_robot.rs` → `tests/mock_async_create.rs`
+  - **Test function renames**: `robot_*` / `async_robot_*` → `create_*` / `async_create_*`; `robot_model_*` → `model_*`
+  - **Variable renames**: `robot` → `create` in all tests and examples
+  - **Doc comment updates**: "Synchronous/Asynchronous robot API" → "…Create API"; struct docs updated; transport crates "for the robot" → "for the Create/Roomba"; hardware-describing comments kept as-is
+  - Commit: `e23c4fd`
+
 ### Remaining
