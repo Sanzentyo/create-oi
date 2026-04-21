@@ -164,10 +164,6 @@ impl core::fmt::Display for RobotModel {
     }
 }
 
-/// Deprecated alias for [`RobotModel`].
-#[deprecated(since = "0.5.0", note = "renamed to `RobotModel`")]
-pub type CreateRobotModel = RobotModel;
-
 // ---------------------------------------------------------------------------
 // Validated newtypes
 // ---------------------------------------------------------------------------
@@ -255,6 +251,21 @@ impl TryFrom<f32> for AngularVelocity {
     }
 }
 
+/// Opaque arc radius value in meters.
+///
+/// This type can only be constructed via [`Radius::new`]; direct construction
+/// is intentionally prevented to enforce OI protocol validation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveRadius(f32);
+
+impl CurveRadius {
+    /// Returns the radius value in meters.
+    #[inline(always)]
+    pub const fn as_meters(self) -> f32 {
+        self.0
+    }
+}
+
 /// Turn radius for the OI `drive` command.
 ///
 /// The OI protocol uses special i16 values for straight and in-place turns,
@@ -274,10 +285,11 @@ pub enum Radius {
     TurnInPlaceCw,
     /// Turn in place counter-clockwise (spin left).
     TurnInPlaceCcw,
-    /// Drive in an arc with the given radius in meters.
-    /// Valid range: [-2.0, 2.0] m, excluding 0 (use in-place turns instead).
-    /// Positive = turn left, negative = turn right.
-    Curve(f32),
+    /// Drive in an arc with the given radius.
+    ///
+    /// Use [`Radius::new`] to construct — direct `Radius::Curve(CurveRadius(...))`
+    /// construction is not possible because [`CurveRadius`] has a private inner field.
+    Curve(CurveRadius),
 }
 
 impl Radius {
@@ -291,24 +303,32 @@ impl Radius {
 
     /// Create a curve radius from a value in meters.
     ///
-    /// Valid range: [-2.0, 2.0] m. Values of exactly `0.001` (1 mm) or
-    /// `-0.001` (-1 mm) are rejected because they collide with OI special
-    /// values; use [`Radius::TurnInPlaceCcw`] or [`Radius::TurnInPlaceCw`].
+    /// Valid range: `[-2.0, 2.0]` m. Any value whose rounded millimeter
+    /// encoding falls on a reserved OI special (`-1`, `0`, or `1` mm) is
+    /// rejected. Use [`Radius::TurnInPlaceCcw`] / [`Radius::TurnInPlaceCw`]
+    /// for in-place spins, and choose a magnitude of at least `0.002` m for
+    /// genuine arc radii.
     pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("Radius", value)?;
         validate_range("Radius", value, Self::MIN_CURVE_M, Self::MAX_CURVE_M)?;
         let raw_mm = libm::roundf(value * M_TO_MM) as i16;
-        // Reject raw values that collide with protocol specials
-        if raw_mm == OI_RADIUS_STRAIGHT_RAW
-            || raw_mm == OI_RADIUS_TURN_CW_RAW
+        if raw_mm == 0 {
+            return Err(ValidationError {
+                field: "Radius",
+                reason: "value rounds to 0 mm which is not a valid OI arc radius; choose a value whose absolute magnitude is at least 0.002 m",
+            });
+        }
+        // Reject raw values that collide with protocol specials (-1, 1, 32767)
+        if raw_mm == OI_RADIUS_TURN_CW_RAW
             || raw_mm == OI_RADIUS_TURN_CCW_RAW
+            || raw_mm == OI_RADIUS_STRAIGHT_RAW
         {
             return Err(ValidationError {
                 field: "Radius",
-                reason: "value maps to reserved OI special; use Radius::Straight/TurnInPlaceCw/TurnInPlaceCcw",
+                reason: "value rounds to a reserved OI special encoding; use Radius::Straight/TurnInPlaceCw/TurnInPlaceCcw",
             });
         }
-        Ok(Self::Curve(value))
+        Ok(Self::Curve(CurveRadius(value)))
     }
 
     /// Get the physical radius in meters, if this is a curve.
@@ -316,7 +336,7 @@ impl Radius {
     #[inline(always)]
     pub const fn as_meters(self) -> Option<f32> {
         match self {
-            Self::Curve(v) => Some(v),
+            Self::Curve(r) => Some(r.as_meters()),
             _ => None,
         }
     }
@@ -327,7 +347,7 @@ impl Radius {
             Self::Straight => OI_RADIUS_STRAIGHT_RAW,
             Self::TurnInPlaceCw => OI_RADIUS_TURN_CW_RAW,
             Self::TurnInPlaceCcw => OI_RADIUS_TURN_CCW_RAW,
-            Self::Curve(m) => libm::roundf(m * M_TO_MM) as i16,
+            Self::Curve(r) => libm::roundf(r.as_meters() * M_TO_MM) as i16,
         }
     }
 }
@@ -338,7 +358,7 @@ impl core::fmt::Display for Radius {
             Self::Straight => f.write_str("straight"),
             Self::TurnInPlaceCw => f.write_str("turn-cw"),
             Self::TurnInPlaceCcw => f.write_str("turn-ccw"),
-            Self::Curve(m) => write!(f, "{:.3} m", m),
+            Self::Curve(r) => write!(f, "{:.3} m", r.as_meters()),
         }
     }
 }
@@ -527,9 +547,9 @@ impl core::fmt::Display for SongNumber {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SongNote {
     /// MIDI note number (31–127).
-    pub midi_note: u8,
+    midi_note: u8,
     /// Duration in units of 1/64 second (0–255).
-    pub duration_64ths: u8,
+    duration_64ths: u8,
 }
 
 impl SongNote {
@@ -547,6 +567,18 @@ impl SongNote {
             midi_note,
             duration_64ths,
         })
+    }
+
+    /// Returns the MIDI note number (31–127).
+    #[inline(always)]
+    pub const fn midi_note(self) -> u8 {
+        self.midi_note
+    }
+
+    /// Returns the duration in 1/64-second units (0–255).
+    #[inline(always)]
+    pub const fn duration_64ths(self) -> u8 {
+        self.duration_64ths
     }
 }
 
@@ -737,6 +769,51 @@ mod tests {
         assert!(Radius::new(0.001).is_err());
         // -0.001 m = -1 mm = TurnInPlaceCw special
         assert!(Radius::new(-0.001).is_err());
+    }
+
+    #[test]
+    fn radius_zero_rejected() {
+        // Exact zero
+        assert!(Radius::new(0.0).is_err());
+        // Sub-millimetre values that round to 0 mm
+        assert!(Radius::new(0.0004).is_err());
+        assert!(Radius::new(-0.0004).is_err());
+    }
+
+    #[test]
+    fn radius_smallest_valid_curve() {
+        // 0.002 m = 2 mm — first valid positive arc radius
+        let r = Radius::new(0.002).unwrap();
+        assert_eq!(r.to_mm(), 2);
+        // -0.002 m = -2 mm — first valid negative arc radius
+        let r = Radius::new(-0.002).unwrap();
+        assert_eq!(r.to_mm(), -2);
+    }
+
+    #[test]
+    fn song_note_accessors() {
+        let note = SongNote::new(69, 32).unwrap();
+        assert_eq!(note.midi_note(), 69);
+        assert_eq!(note.duration_64ths(), 32);
+    }
+
+    #[test]
+    fn song_note_invalid_midi() {
+        assert!(SongNote::new(30, 32).is_err());
+        assert!(SongNote::new(128, 32).is_err());
+        // Boundary values
+        assert!(SongNote::new(31, 0).is_ok());
+        assert!(SongNote::new(127, 255).is_ok());
+    }
+
+    #[test]
+    fn curve_radius_as_meters() {
+        let r = Radius::new(0.5).unwrap();
+        if let Radius::Curve(c) = r {
+            assert!((c.as_meters() - 0.5).abs() < 1e-6);
+        } else {
+            panic!("expected Curve variant");
+        }
     }
 
     #[test]

@@ -463,7 +463,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         let mut raw = [(0u8, 0u8); 16];
         let count = notes.len().min(16);
         for (i, n) in notes.iter().enumerate().take(count) {
-            raw[i] = (n.midi_note, n.duration_64ths);
+            raw[i] = (n.midi_note(), n.duration_64ths());
         }
         let cmd = command::encode_song(number.get(), &raw[..count]).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)

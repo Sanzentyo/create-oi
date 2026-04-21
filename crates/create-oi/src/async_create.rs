@@ -510,7 +510,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         let mut raw = [(0u8, 0u8); 16];
         let count = notes.len().min(16);
         for (i, n) in notes.iter().enumerate().take(count) {
-            raw[i] = (n.midi_note, n.duration_64ths);
+            raw[i] = (n.midi_note(), n.duration_64ths());
         }
         let mut buf = [0u8; 35]; // 1 opcode + 1 song_number + 1 count + 16*2 notes = 35
         let len = command::encode_song_into(&mut buf, number.get(), &raw[..count])?;

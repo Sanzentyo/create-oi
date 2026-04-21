@@ -78,8 +78,8 @@ pub mod prelude {
     #[cfg(feature = "std")]
     pub use crate::transport::Transport;
     pub use crate::types::{
-        AngularVelocity, ButtonBits, CleanMode, DayOfWeek, LedIntensity, MotorBits, MotorPower,
-        PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
+        AngularVelocity, ButtonBits, CleanMode, CurveRadius, DayOfWeek, LedIntensity, MotorBits,
+        MotorPower, PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports
