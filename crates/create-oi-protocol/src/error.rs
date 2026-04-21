@@ -6,6 +6,7 @@
 use core::fmt;
 
 /// Errors from protocol encoding/decoding operations.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
     /// Not enough bytes to decode a sensor packet or stream frame.
@@ -18,9 +19,9 @@ pub enum ProtocolError {
 
     /// A stream frame checksum did not match.
     Checksum {
-        /// Expected checksum value.
+        /// Expected checksum value (computed over the received frame bytes).
         expected: u8,
-        /// Actual computed checksum value.
+        /// Received checksum byte from the robot.
         actual: u8,
     },
 
@@ -48,6 +49,15 @@ pub enum ProtocolError {
         /// Number of items provided.
         got: usize,
     },
+
+    /// More data was provided than expected for the requested packet list.
+    ///
+    /// Returned by [`SensorData::decode_packets`] when the input slice
+    /// has bytes left over after all requested packets have been decoded.
+    UnexpectedData {
+        /// Number of trailing bytes that were not consumed.
+        trailing: usize,
+    },
 }
 
 impl fmt::Display for ProtocolError {
@@ -73,6 +83,9 @@ impl fmt::Display for ProtocolError {
             }
             Self::TooManyItems { max, got } => {
                 write!(f, "too many items: max {max}, got {got}")
+            }
+            Self::UnexpectedData { trailing } => {
+                write!(f, "unexpected trailing data: {trailing} bytes not consumed")
             }
         }
     }

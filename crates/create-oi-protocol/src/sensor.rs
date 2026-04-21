@@ -162,6 +162,11 @@ impl SensorData {
             let consumed = self.decode_packet(id, &data[offset..])?;
             offset += consumed;
         }
+        if offset != data.len() {
+            return Err(ProtocolError::UnexpectedData {
+                trailing: data.len() - offset,
+            });
+        }
         Ok(())
     }
 
@@ -568,6 +573,18 @@ mod tests {
         sd.decode_packets(&[8, 22], &data).unwrap();
         assert_eq!(sd.wall, Some(true));
         assert_eq!(sd.voltage, Some(12500));
+    }
+
+    #[test]
+    fn decode_packets_trailing_bytes_returns_error() {
+        let mut sd = SensorData::default();
+        // wall (id 8, 1 byte) + 2 extra bytes
+        let data = [1, 0xFF, 0xFF];
+        let err = sd.decode_packets(&[8], &data).unwrap_err();
+        assert!(
+            matches!(err, ProtocolError::UnexpectedData { trailing: 2 }),
+            "expected UnexpectedData(2), got {err:?}"
+        );
     }
 
     #[test]

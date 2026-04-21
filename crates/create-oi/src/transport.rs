@@ -59,6 +59,7 @@ pub trait Transport: fmt::Debug + Send {
     fn write_all(&mut self, data: &[u8]) -> std::io::Result<()>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
+    /// Must return at least 1 byte on success (0 indicates EOF/disconnect).
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
 
     /// Flush the output buffer.

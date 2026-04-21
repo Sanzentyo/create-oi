@@ -286,7 +286,15 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     }
 
     /// Pause or resume the sensor stream.
+    ///
+    /// Returns an error if this robot model does not support sensor streaming.
     pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<std::io::Error>> {
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
         self.send_cmd(&command::encode_toggle_stream(enable))
     }
 
@@ -295,7 +303,9 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
-            return Ok(Vec::new());
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
+            ));
         }
         let results = self.stream_parser.feed(&buf[..n]);
         results
@@ -313,9 +323,12 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ) -> Result<(), Error<std::io::Error>> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
-        if n > 0 {
-            self.stream_parser.feed_with(&buf[..n], callback);
+        if n == 0 {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
+            ));
         }
+        self.stream_parser.feed_with(&buf[..n], callback);
         Ok(())
     }
 
@@ -382,6 +395,25 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             });
         }
         Ok(self.transport)
+    }
+
+    /// Define a song.
+    ///
+    /// Songs can be defined in Passive, Safe, and Full mode per the OI spec.
+    pub fn define_song(
+        &mut self,
+        number: SongNumber,
+        notes: &[(u8, u8)],
+    ) -> Result<(), Error<std::io::Error>> {
+        let cmd = command::encode_song(number.get(), notes).map_err(Error::Protocol)?;
+        self.send_cmd(&cmd)
+    }
+
+    /// Play a previously defined song.
+    ///
+    /// Songs can be played in Passive, Safe, and Full mode per the OI spec.
+    pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error<std::io::Error>> {
+        self.send_cmd(&command::encode_play(number.get()))
     }
 }
 
@@ -454,28 +486,28 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
     }
 
-    /// Define a song.
-    pub fn define_song(
-        &mut self,
-        number: SongNumber,
-        notes: &[(u8, u8)],
-    ) -> Result<(), Error<std::io::Error>> {
-        let cmd = command::encode_song(number.get(), notes).map_err(Error::Protocol)?;
-        self.send_cmd(&cmd)
-    }
-
-    /// Play a previously defined song.
-    pub fn play_song(&mut self, number: SongNumber) -> Result<(), Error<std::io::Error>> {
-        self.send_cmd(&command::encode_play(number.get()))
-    }
-
     /// Set motor PWM (main brush, side brush, vacuum).
+    ///
+    /// OI motor PWM range is -127..=127. Passing -128 (i8::MIN) is invalid
+    /// and returns a `ValidationError` without sending any bytes.
     pub fn set_motors_pwm(
         &mut self,
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
     ) -> Result<(), Error<std::io::Error>> {
+        for (name, val) in [
+            ("main_brush", main_brush),
+            ("side_brush", side_brush),
+            ("vacuum", vacuum),
+        ] {
+            if val == i8::MIN {
+                return Err(Error::Validation(ValidationError {
+                    field: name,
+                    reason: "motor PWM value -128 is not valid; range is -127..=127",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
     }
 

@@ -20,6 +20,8 @@ struct MockTransport {
     /// Current read position.
     read_pos: usize,
     closed: bool,
+    /// When true, `read()` returns `Ok(0)` to simulate EOF/disconnect.
+    eof_on_read: bool,
 }
 
 impl MockTransport {
@@ -29,6 +31,7 @@ impl MockTransport {
             read_buf: Vec::new(),
             read_pos: 0,
             closed: false,
+            eof_on_read: false,
         }
     }
 
@@ -38,6 +41,18 @@ impl MockTransport {
             read_buf: data.to_vec(),
             read_pos: 0,
             closed: false,
+            eof_on_read: false,
+        }
+    }
+
+    /// Construct a transport that returns `Ok(0)` (EOF/disconnect) on every read.
+    fn with_eof_on_read() -> Self {
+        Self {
+            written: Vec::new(),
+            read_buf: Vec::new(),
+            read_pos: 0,
+            closed: false,
+            eof_on_read: true,
         }
     }
 
@@ -62,6 +77,9 @@ impl Transport for MockTransport {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.closed {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
+        }
+        if self.eof_on_read {
+            return Ok(0);
         }
         let available = &self.read_buf[self.read_pos..];
         if available.is_empty() {
@@ -454,4 +472,85 @@ fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
         "expected UnknownPacketId error, got {err:?}"
     );
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// poll_stream EOF handling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn poll_stream_eof_returns_protocol_error() {
+    let mock = MockTransport::with_eof_on_read();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap();
+
+    let err = robot.poll_stream().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            create_oi::error::Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 }
+            )
+        ),
+        "expected InsufficientData on EOF, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// toggle_stream model guard
+// ---------------------------------------------------------------------------
+
+#[test]
+fn toggle_stream_unsupported_model_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Roomba400);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.toggle_stream(true).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// set_motors_pwm i8::MIN guard
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_motors_pwm_min_i8_rejects_before_send() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_motors_pwm(i8::MIN, 0, 0).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
+    let err = robot.set_motors_pwm(0, i8::MIN, 0).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
+    let err = robot.set_motors_pwm(0, 0, i8::MIN).unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// define_song available in Passive mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn define_song_available_in_passive() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    // define_song should compile and succeed in Passive mode
+    let mut robot = robot.start().unwrap();
+    let notes = [(69u8, 32u8), (71u8, 32u8)];
+    robot
+        .define_song(SongNumber::new(0).unwrap(), &notes)
+        .unwrap();
+    // Song opcode = 140
+    let written = robot.transport().written_bytes();
+    assert_eq!(written[1], 140);
 }

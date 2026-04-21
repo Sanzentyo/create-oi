@@ -17,6 +17,8 @@ struct MockAsyncTransport {
     read_buf: Vec<u8>,
     read_pos: usize,
     closed: bool,
+    /// When true, `read()` returns `Ok(0)` to simulate EOF/disconnect.
+    eof_on_read: bool,
 }
 
 impl MockAsyncTransport {
@@ -26,6 +28,7 @@ impl MockAsyncTransport {
             read_buf: Vec::new(),
             read_pos: 0,
             closed: false,
+            eof_on_read: false,
         }
     }
 
@@ -35,6 +38,17 @@ impl MockAsyncTransport {
             read_buf: data.to_vec(),
             read_pos: 0,
             closed: false,
+            eof_on_read: false,
+        }
+    }
+
+    fn with_eof_on_read() -> Self {
+        Self {
+            written: Vec::new(),
+            read_buf: Vec::new(),
+            read_pos: 0,
+            closed: false,
+            eof_on_read: true,
         }
     }
 
@@ -57,6 +71,9 @@ impl AsyncTransport for MockAsyncTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if self.closed {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "closed"));
+        }
+        if self.eof_on_read {
+            return Ok(0);
         }
         let available = &self.read_buf[self.read_pos..];
         if available.is_empty() {
@@ -434,4 +451,74 @@ async fn async_query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
         "expected UnknownPacketId error, got {err:?}"
     );
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// poll_stream EOF handling
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_poll_stream_eof_returns_protocol_error() {
+    let mock = MockAsyncTransport::with_eof_on_read();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap();
+
+    let err = robot.poll_stream().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            create_oi::error::Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 }
+            )
+        ),
+        "expected InsufficientData on EOF, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// toggle_stream model guard (async, unsupported model)
+// already tested above for Roomba400; this tests the *supported* model passes
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// set_motors_pwm i8::MIN guard
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_set_motors_pwm_min_i8_rejects_before_send() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+    let bytes_before = robot.transport().written_bytes().len();
+
+    let err = robot.set_motors_pwm(i8::MIN, 0, 0).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
+    let err = robot.set_motors_pwm(0, i8::MIN, 0).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+
+    let err = robot.set_motors_pwm(0, 0, i8::MIN).await.unwrap_err();
+    assert!(matches!(err, create_oi::error::Error::Validation(_)));
+    assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// define_song available in Passive mode
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_define_song_available_in_passive() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap();
+    let notes = [(69u8, 32u8), (71u8, 32u8)];
+    robot
+        .define_song(SongNumber::new(0).unwrap(), &notes)
+        .await
+        .unwrap();
+    // Song opcode = 140
+    let written = robot.transport().written_bytes();
+    assert_eq!(written[1], 140);
 }

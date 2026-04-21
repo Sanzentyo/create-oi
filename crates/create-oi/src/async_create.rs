@@ -340,7 +340,15 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Pause or resume the sensor stream.
+    ///
+    /// Returns an error if this robot model does not support sensor streaming.
     pub async fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<T::Error>> {
+        if !self.model.supports_stream() {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
         self.send_cmd(&command::encode_toggle_stream(enable)).await
     }
 
@@ -350,7 +358,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).await.map_err(Error::Io)?;
         if n == 0 {
-            return Ok(Vec::new());
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
+            ));
         }
         let results = self.stream_parser.feed(&buf[..n]);
         results
@@ -368,9 +378,12 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     ) -> Result<(), Error<T::Error>> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).await.map_err(Error::Io)?;
-        if n > 0 {
-            self.stream_parser.feed_with(&buf[..n], callback);
+        if n == 0 {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
+            ));
         }
+        self.stream_parser.feed_with(&buf[..n], callback);
         Ok(())
     }
 
@@ -437,6 +450,26 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
             });
         }
         Ok(self.transport)
+    }
+
+    /// Define a song.
+    ///
+    /// Songs can be defined in Passive, Safe, and Full mode per the OI spec.
+    pub async fn define_song(
+        &mut self,
+        number: SongNumber,
+        notes: &[(u8, u8)],
+    ) -> Result<(), Error<T::Error>> {
+        let mut buf = [0u8; 35]; // 1 opcode + 1 song_number + 1 count + 16*2 notes = 35
+        let len = command::encode_song_into(&mut buf, number.get(), notes)?;
+        self.send_cmd(&buf[..len]).await
+    }
+
+    /// Play a previously defined song.
+    ///
+    /// Songs can be played in Passive, Safe, and Full mode per the OI spec.
+    pub async fn play_song(&mut self, number: SongNumber) -> Result<(), Error<T::Error>> {
+        self.send_cmd(&command::encode_play(number.get())).await
     }
 }
 
@@ -514,29 +547,28 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
             .await
     }
 
-    /// Define a song.
-    pub async fn define_song(
-        &mut self,
-        number: SongNumber,
-        notes: &[(u8, u8)],
-    ) -> Result<(), Error<T::Error>> {
-        let mut buf = [0u8; 35]; // 1 opcode + 1 song_number + 1 count + 16*2 notes = 35
-        let len = command::encode_song_into(&mut buf, number.get(), notes)?;
-        self.send_cmd(&buf[..len]).await
-    }
-
-    /// Play a previously defined song.
-    pub async fn play_song(&mut self, number: SongNumber) -> Result<(), Error<T::Error>> {
-        self.send_cmd(&command::encode_play(number.get())).await
-    }
-
     /// Set motor PWM (main brush, side brush, vacuum).
+    ///
+    /// OI motor PWM range is -127..=127. Passing -128 (i8::MIN) is invalid
+    /// and returns a `ValidationError` without sending any bytes.
     pub async fn set_motors_pwm(
         &mut self,
         main_brush: i8,
         side_brush: i8,
         vacuum: i8,
     ) -> Result<(), Error<T::Error>> {
+        for (name, val) in [
+            ("main_brush", main_brush),
+            ("side_brush", side_brush),
+            ("vacuum", vacuum),
+        ] {
+            if val == i8::MIN {
+                return Err(Error::Validation(ValidationError {
+                    field: name,
+                    reason: "motor PWM value -128 is not valid; range is -127..=127",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_motors_pwm(main_brush, side_brush, vacuum))
             .await
     }
