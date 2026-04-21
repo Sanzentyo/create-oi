@@ -106,4 +106,31 @@
 - 1 protocol doc test
 - Total: **149 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅
 
+- [x] **Round 5 spec compliance + streaming guard**:
+  - **Feature**: `SongNote { midi_note: u8, duration_64ths: u8 }` validated newtype; `new()` validates `midi_note` in `31..=127` per OI spec §5.13
+  - **Breaking**: `define_song()` signature changed from `&[(u8,u8)]` to `&[SongNote]` (semver-breaking: bumps to 0.5 when published)
+  - **Feature**: Streaming/query mutual exclusion — `streaming: bool` field on `Create` + `AsyncCreate`; `start_stream()` sets it; `toggle_stream(false)` clears it; `query_sensor_raw*` and `query_list` return `ValidationError` while streaming is active; flag survives mode transitions
+  - **Bug fix**: `AngularVelocity` MAX corrected to `±(2 × 0.5 / 0.235) ≈ ±4.255 rad/s` (was ±π, incorrect for Create 2 geometry)
+  - **Bug fix**: `define_song` now returns `TooManyItems` error for > 16 notes (was silently truncating, breaking the spec's own error detection)
+  - **Feature**: `set_digit_leds` now validates each character is printable ASCII (32–126); returns `ValidationError` for out-of-range bytes (sync + async)
+  - **Prelude**: `SongNote` added to `create_oi::prelude`
+  - Added 8 integration tests (4 sync + 4 async): streaming guard on query, resume after toggle, digit LED ASCII validation
+  - All 7 existing `define_song` call sites in tests updated to `SongNote::new(...).unwrap()`
+
+### Test Summary (Round 5)
+- 51 unit tests (protocol)
+- 34 unit tests (types + control)
+- 36 sync mock robot integration tests (+4 from Round 5)
+- 35 async mock robot integration tests (+4 from Round 5)
+- 1 protocol doc test
+- Total: **157 tests** | `just ci` passes: fmt ✅ clippy ✅ build ✅ test ✅ | commit `3bac273`
+
+- [x] **Embassy split transport** (`EmbassySplitTransport`):
+  - Added `EmbassySplitTransport<R, W>` to `create-oi-embassy`, complementing the existing `EmbassyTransport<T>`
+  - Accepts separate RX + TX halves (e.g. from `uart.split()` on Embassy STM32/RP2040)
+  - Shared error type `E` constrained via `ErrorType<Error = E>` on both halves
+  - Accessors: `new(rx, tx)`, `into_parts()`, `rx()`, `tx()`, `rx_mut()`, `tx_mut()`
+  - `delay()` uses `embassy_time::Timer::after()` (same as `EmbassyTransport`)
+  - `just check-nostd` and `just ci` pass with no regressions
+
 ### Remaining

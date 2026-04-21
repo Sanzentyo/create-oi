@@ -43,11 +43,11 @@ crates/
 │   │   ├── create.rs            # Create<M, T: Transport> — sync API (std only)
 │   │   └── async_create.rs      # AsyncCreate<M, T: AsyncTransport> — async API (no_std)
 │   └── tests/
-│       ├── mock_robot.rs        # 14 sync integration tests
-│       └── mock_async_robot.rs  # 13 async integration tests
+│       ├── mock_robot.rs        # 36 sync integration tests
+│       └── mock_async_robot.rs  # 35 async integration tests
 ├── create-oi-serial/            # SerialTransport (sync, std)
 ├── create-oi-tokio/             # TokioTransport (async, std, tokio runtime)
-├── create-oi-embassy/           # EmbassyTransport (async, no_std, Embassy runtime)
+├── create-oi-embassy/           # EmbassyTransport + EmbassySplitTransport (async, no_std, Embassy runtime)
 ├── create-oi-smol/              # SmolTransport (experimental, publish=false)
 └── create-oi-dora/              # dora-rs dataflow node (publish=false)
 ```
@@ -95,10 +95,12 @@ Transport-aware TypeState API:
 
 ### `create-oi-embassy` — Embassy Transport Adapter
 
-Thin wrapper implementing `AsyncTransport` for any `embedded_io_async::Read + Write`:
+Thin wrapper implementing `AsyncTransport` for Embassy UART peripherals:
+- [`EmbassyTransport<T>`] — wraps a combined read+write UART peripheral (`T: Read + Write`)
+- [`EmbassySplitTransport<R, W>`] — wraps separate RX/TX halves from `uart.split()`
 - Uses `embassy_time::Timer::after()` for `delay()`
 - Preserves the concrete HAL error type (no erasure)
-- Zero-cost abstraction over Embassy UART peripherals
+- Zero-cost abstraction; no `Send` requirement (Embassy peripherals are often `!Send`)
 
 ## TypeState Pattern
 
@@ -129,11 +131,12 @@ All domain values are proper Rust enums/newtypes:
 
 Physical quantities use validated newtypes with private inner fields:
 - `Velocity(f32)` — range [-0.5, 0.5] m/s, rounds to nearest mm/s for OI
-- `AngularVelocity(f32)` — range [-π, π] rad/s
+- `AngularVelocity(f32)` — range `[-4.255, 4.255]` rad/s (`2 × 0.5 m/s / 0.235 m axle`)
 - `Radius` — enum: `Straight | TurnInPlaceCw | TurnInPlaceCcw | Curve(f32)`
   - `Curve` range: [-2.0, 2.0] m; special OI values are distinct variants
   - `to_mm()` maps directly to OI protocol i16 (0x7FFF for straight, ±1 for in-place)
 - `MotorPower(f32)` — range [-1.0, 1.0], rounds to nearest PWM value
+- `SongNote { midi_note: u8, duration_64ths: u8 }` — MIDI note 31..=127 (OI spec §5.13)
 - All float newtypes reject NaN/infinity via `new()` and `TryFrom<f32>`
 - All protocol constants (velocities, radii, PWM limits) are named with doc comments
 
