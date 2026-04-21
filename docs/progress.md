@@ -318,3 +318,57 @@ in Off mode.
 
 ### Result
 228 tests pass (41 unit + 64 sync + 63 async + 56 protocol + 1 doc). CI green.
+
+---
+
+## Round 12 OI Spec Compliance Audit
+
+**Date**: 2026-07-20
+**Commit**: (pending)
+
+### Changes
+
+#### `AsyncTransport::delay` signature
+- Changed `async fn delay(&self, ...)` → `async fn delay(&mut self, ...)`
+- Consistent with all other transport methods (`write_all`, `read`, `flush` all take `&mut self`)
+- Updated all implementations: EmbassyTransport, EmbassySplitTransport, TokioTransport, SmolTransport, MockAsyncTransport
+- `sleep_mode_change(&self)` in async_create.rs updated to `&mut self`
+
+#### `power_off()` return type — **Breaking change**
+- Changed from `Create<Passive, T>` / `AsyncCreate<Passive, T>` → `Create<Off, T>` / `AsyncCreate<Off, T>`
+- Per OI spec: opcode 133 transitions the OI to **Off mode** (robot powers down)
+- Returning Passive was misleading; robot stops responding to OI commands after power-off
+- To resume: physically wake robot (Clean button or dock), then call `start()`
+
+#### `clean()` and `seek_dock()` — available in Safe and Full modes
+- Added to `impl<M: Actuatable, T: Transport> Create<M, T>` and async equivalent
+- Per OI spec these commands are valid from Passive, Safe, or Full modes
+- Previously only available from Passive mode (spec gap)
+- Updated doc comments on Passive versions to note cross-mode availability
+
+#### `query_sensor_raw` / `query_sensor_raw_into` — group packet support
+- Now accepts group packet IDs (0-6, 100) via `group_data_len()` fallback
+- Uses correct byte count for the full group response
+- Unknown IDs (neither individual 7-58 nor group 0-6/100) still return `UnknownPacketId`
+- `query_sensor()` (typed) still requires individual packet IDs (group decoding is ambiguous)
+
+### Tests added (11 sync + 11 async = 22 new tests)
+
+- `power_off_returns_off_handle` / `async_power_off_returns_off_handle` (replaces Passive variant)
+- `power_off_clears_streaming_state` / `async_power_off_clears_streaming_state` (updated)
+- `clean_available_in_safe_mode` / `async_clean_available_in_safe_mode`
+- `clean_available_in_full_mode` / `async_clean_available_in_full_mode`
+- `seek_dock_available_in_safe_mode` / `async_seek_dock_available_in_safe_mode`
+- `seek_dock_available_in_full_mode` / `async_seek_dock_available_in_full_mode`
+- `query_sensor_raw_with_group_id_zero` / `async_query_sensor_raw_with_group_id_zero`
+- `query_sensor_raw_into_with_group_id_100` / `async_query_sensor_raw_into_with_group_id_100`
+- `query_sensor_raw_still_rejects_truly_unknown_id` / `async_query_sensor_raw_rejects_unknown_id`
+
+### Not fixed this round (deferred)
+
+- **`baud()` command**: requires transport-level baud reconfiguration (still deferred)
+- **`control()` opcode 130**: Legacy Create 1 alias for Safe mode; no public API needed
+- **`query_sensor()` with group IDs**: would require returning multiple `SensorData` — deferred
+
+### Result
+239 tests pass (41 unit + 71 sync + 70 async + 56 protocol + 1 doc). CI green. no_std builds pass.

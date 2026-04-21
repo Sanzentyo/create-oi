@@ -113,7 +113,7 @@ where
         <T as Write>::flush(&mut self.io).await
     }
 
-    async fn delay(&self, duration: Duration) {
+    async fn delay(&mut self, duration: Duration) {
         // Clamp to u64::MAX micros to avoid truncation on large durations.
         // In practice OI delays are 100-300ms, so this never triggers.
         let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
@@ -201,7 +201,7 @@ where
         <W as Write>::flush(&mut self.tx).await
     }
 
-    async fn delay(&self, duration: Duration) {
+    async fn delay(&mut self, duration: Duration) {
         let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
         Timer::after(embassy_time::Duration::from_micros(micros)).await;
     }

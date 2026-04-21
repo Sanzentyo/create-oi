@@ -45,7 +45,7 @@ impl AsyncTransport for TokioTransport {
         tokio::io::AsyncWriteExt::flush(&mut self.port).await
     }
 
-    async fn delay(&self, duration: std::time::Duration) {
+    async fn delay(&mut self, duration: std::time::Duration) {
         tokio::time::sleep(duration).await;
     }
 }

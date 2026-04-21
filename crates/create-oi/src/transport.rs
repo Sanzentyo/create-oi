@@ -46,7 +46,7 @@ pub trait AsyncTransport: fmt::Debug {
     /// This abstracts over `tokio::time::sleep` / `smol::Timer::after` /
     /// `embassy_time::Timer::after` so that protocol-level delays
     /// (e.g. mode-change waits) don't depend on a specific runtime.
-    async fn delay(&self, duration: Duration);
+    async fn delay(&mut self, duration: Duration);
 }
 
 /// Synchronous (blocking) transport for communicating with the robot.

@@ -920,25 +920,27 @@ fn to_off_succeeds_on_create2_sends_stop_opcode() {
 }
 
 // ---------------------------------------------------------------------------
-// Round 10: power_off() returns Create<Passive, T> and clears stream state
+// Round 12: power_off() now returns Create<Off, T> per OI spec (opcode 133 → Off mode)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn power_off_returns_passive_handle() {
+fn power_off_returns_off_handle() {
     let mock = MockTransport::new();
     let create = Create::new(mock, RobotModel::Create2);
     let create = create.start().unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    // power_off() must now return Create<Passive, _>, not T
-    let passive = create.power_off().unwrap();
-    let written = passive.transport().written_bytes();
+    // power_off() must return Create<Off, _> — the robot powers down
+    let off = create.power_off().unwrap();
+    let written = off.transport().written_bytes();
     // POWER opcode = 133
     assert_eq!(
         written[bytes_before], 133,
         "expected POWER opcode 133, got {}",
         written[bytes_before]
     );
+    // Verify the handle is Off — start() is only callable on Create<Off, _>
+    let _passive = off.start().unwrap();
 }
 
 #[test]
@@ -949,9 +951,11 @@ fn power_off_clears_streaming_state() {
 
     // Start a stream first
     create.start_stream(&[8u8]).unwrap();
-    // After power_off(), the returned handle must have streaming=false
-    let mut passive = create.power_off().unwrap();
-    // query_sensor_raw should NOT return a ValidationError about streaming
+    // After power_off(), the Off handle must have streaming=false
+    let off = create.power_off().unwrap();
+    // Call start() to get an interactive handle; the new Passive handle inherits Off's cleared state
+    let mut passive = off.start().unwrap();
+    // query_sensor_raw should NOT return a streaming ValidationError
     let result = passive.query_sensor_raw(8);
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
@@ -1158,5 +1162,149 @@ fn set_scheduling_leds_rejects_roomba400() {
     assert!(
         result.is_err(),
         "set_scheduling_leds should fail on Roomba 400"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 12: clean()/seek_dock() available from Safe and Full modes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clean_available_in_safe_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let passive = create.clean(CleanMode::Default).unwrap();
+    let written = passive.transport().written_bytes();
+    // SAFE=131 (start→safe), CLEAN=135
+    assert!(
+        written.contains(&135),
+        "expected CLEAN opcode 135 in payload"
+    );
+}
+
+#[test]
+fn clean_available_in_full_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap()
+        .to_full()
+        .unwrap();
+
+    let passive = create.clean(CleanMode::Spot).unwrap();
+    let written = passive.transport().written_bytes();
+    // SPOT=134
+    assert!(
+        written.contains(&134),
+        "expected SPOT opcode 134 in payload"
+    );
+}
+
+#[test]
+fn seek_dock_available_in_safe_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let passive = create.seek_dock().unwrap();
+    let written = passive.transport().written_bytes();
+    // DOCK=143
+    assert!(
+        written.contains(&143),
+        "expected DOCK opcode 143 in payload"
+    );
+}
+
+#[test]
+fn seek_dock_available_in_full_mode() {
+    let mock = MockTransport::new();
+    let create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap()
+        .to_full()
+        .unwrap();
+
+    let passive = create.seek_dock().unwrap();
+    let written = passive.transport().written_bytes();
+    assert!(
+        written.contains(&143),
+        "expected DOCK opcode 143 in payload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 12: query_sensor_raw accepts group packet IDs (0-6, 100)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_sensor_raw_with_group_id_zero() {
+    // Group 0 spans packets 7-26; get expected byte count from protocol
+    let group_len = create_oi::protocol::opcode::group_data_len(0).expect("group 0 must be known");
+    let read_data = vec![0u8; group_len];
+    let mock = MockTransport::with_read_data(&read_data);
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let result = create.query_sensor_raw(0);
+    assert!(
+        result.is_ok(),
+        "group ID 0 should be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().len(), group_len);
+}
+
+#[test]
+fn query_sensor_raw_into_with_group_id_100() {
+    // Group 100 = all individual packets (52 packets); largest group
+    let group_len =
+        create_oi::protocol::opcode::group_data_len(100).expect("group 100 must be known");
+    let read_data = vec![0u8; group_len];
+    let mock = MockTransport::with_read_data(&read_data);
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    let mut buf = vec![0u8; group_len];
+    let result = create.query_sensor_raw_into(100, &mut buf);
+    assert!(
+        result.is_ok(),
+        "group ID 100 should be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap(), group_len);
+}
+
+#[test]
+fn query_sensor_raw_still_rejects_truly_unknown_id() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+
+    // 101 is not a valid individual or group packet ID
+    let result = create.query_sensor_raw(101);
+    assert!(
+        matches!(result, Err(create_oi::error::Error::Protocol(_))),
+        "unknown ID 101 should return ProtocolError"
     );
 }

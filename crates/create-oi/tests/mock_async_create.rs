@@ -89,7 +89,7 @@ impl AsyncTransport for MockAsyncTransport {
         Ok(())
     }
 
-    async fn delay(&self, _duration: Duration) {
+    async fn delay(&mut self, _duration: Duration) {
         // No-op in tests — no real delay needed.
     }
 }
@@ -902,24 +902,26 @@ async fn async_to_off_succeeds_on_create2_sends_stop_opcode() {
 }
 
 // ---------------------------------------------------------------------------
-// Round 10: power_off() returns AsyncCreate<Passive, T> and clears stream (async)
+// Round 12: power_off() now returns AsyncCreate<Off, T> per OI spec (opcode 133 → Off mode)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn async_power_off_returns_passive_handle() {
+async fn async_power_off_returns_off_handle() {
     let mock = MockAsyncTransport::new();
     let create = AsyncCreate::new(mock, RobotModel::Create2);
     let create = create.start().await.unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    let passive = create.power_off().await.unwrap();
-    let written = passive.transport().written_bytes();
+    let off = create.power_off().await.unwrap();
+    let written = off.transport().written_bytes();
     // POWER opcode = 133
     assert_eq!(
         written[bytes_before], 133,
         "expected POWER opcode 133, got {}",
         written[bytes_before]
     );
+    // Verify the handle is Off — start() is only callable on AsyncCreate<Off, _>
+    let _passive = off.start().await.unwrap();
 }
 
 #[tokio::test]
@@ -930,9 +932,11 @@ async fn async_power_off_clears_streaming_state() {
 
     // Start a stream first
     create.start_stream(&[8u8]).await.unwrap();
-    // After power_off(), the returned handle must have streaming=false
-    let mut passive = create.power_off().await.unwrap();
-    // query_sensor_raw should NOT return a ValidationError about streaming
+    // After power_off(), the Off handle must have streaming=false
+    let off = create.power_off().await.unwrap();
+    // Call start() to get an interactive handle
+    let mut passive = off.start().await.unwrap();
+    // query_sensor_raw should NOT return a streaming ValidationError
     let result = passive.query_sensor_raw(8).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
@@ -1149,5 +1153,147 @@ async fn set_scheduling_leds_rejects_roomba400() {
     assert!(
         result.is_err(),
         "set_scheduling_leds should fail on Roomba 400"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 12: clean()/seek_dock() available from Safe and Full modes (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_clean_available_in_safe_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let passive = create.clean(CleanMode::Default).await.unwrap();
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&135), "expected CLEAN opcode 135");
+}
+
+#[tokio::test]
+async fn async_clean_available_in_full_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap()
+        .to_full()
+        .await
+        .unwrap();
+
+    let passive = create.clean(CleanMode::Spot).await.unwrap();
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&134), "expected SPOT opcode 134");
+}
+
+#[tokio::test]
+async fn async_seek_dock_available_in_safe_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let passive = create.seek_dock().await.unwrap();
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&143), "expected DOCK opcode 143");
+}
+
+#[tokio::test]
+async fn async_seek_dock_available_in_full_mode() {
+    let mock = MockAsyncTransport::new();
+    let create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap()
+        .to_full()
+        .await
+        .unwrap();
+
+    let passive = create.seek_dock().await.unwrap();
+    let written = passive.transport().written_bytes();
+    assert!(written.contains(&143), "expected DOCK opcode 143");
+}
+
+// ---------------------------------------------------------------------------
+// Round 12: query_sensor_raw accepts group packet IDs (async)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_query_sensor_raw_with_group_id_zero() {
+    let group_len = create_oi::protocol::opcode::group_data_len(0).expect("group 0 must be known");
+    let read_data = vec![0u8; group_len];
+    let mock = MockAsyncTransport::with_read_data(&read_data);
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let result = create.query_sensor_raw(0).await;
+    assert!(
+        result.is_ok(),
+        "group ID 0 should be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().len(), group_len);
+}
+
+#[tokio::test]
+async fn async_query_sensor_raw_into_with_group_id_100() {
+    let group_len =
+        create_oi::protocol::opcode::group_data_len(100).expect("group 100 must be known");
+    let read_data = vec![0u8; group_len];
+    let mock = MockAsyncTransport::with_read_data(&read_data);
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let mut buf = vec![0u8; group_len];
+    let result = create.query_sensor_raw_into(100, &mut buf).await;
+    assert!(
+        result.is_ok(),
+        "group ID 100 should be accepted, got {:?}",
+        result
+    );
+    assert_eq!(result.unwrap(), group_len);
+}
+
+#[tokio::test]
+async fn async_query_sensor_raw_rejects_unknown_id() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+
+    let result = create.query_sensor_raw(101).await;
+    assert!(
+        matches!(result, Err(create_oi::error::Error::Protocol(_))),
+        "unknown ID 101 should return ProtocolError"
     );
 }

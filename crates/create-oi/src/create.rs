@@ -139,9 +139,10 @@ impl<T: Transport> Create<Passive, T> {
 
     /// Initiate a cleaning cycle. Transitions the robot to Passive mode.
     ///
-    /// Per the OI spec, CLEAN/SPOT/MAX are only valid from Passive mode.
+    /// Per the OI spec, CLEAN/SPOT/MAX are valid from Passive, Safe, or Full mode.
+    /// Also available from Safe and Full via the [`Actuatable`](crate::mode::Actuatable) impl.
     ///
-    /// The OI spec defines three cleaning modes:
+    /// Cleaning modes:
     /// - [`CleanMode::Default`] — standard cleaning pattern
     /// - [`CleanMode::Spot`] — spot cleaning (small area)
     /// - [`CleanMode::Max`] — maximum cleaning (until battery depleted)
@@ -165,7 +166,8 @@ impl<T: Transport> Create<Passive, T> {
 
     /// Seek the dock. Transitions the robot to Passive mode.
     ///
-    /// Per the OI spec, SEEK_DOCK is only valid from Passive mode.
+    /// Per the OI spec, SEEK_DOCK is valid from Passive, Safe, or Full mode.
+    /// Also available from Safe and Full via the [`Actuatable`](crate::mode::Actuatable) impl.
     pub fn seek_dock(
         mut self,
     ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
@@ -294,10 +296,13 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     #[must_use = "query result must be used"]
     pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<std::io::Error>> {
         self.reject_if_streaming()?;
-        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
-            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
-        ))?;
-        let mut buf = vec![0u8; info.len as usize];
+        let len = create_oi_protocol::opcode::packet_info(packet_id)
+            .map(|p| p.len as usize)
+            .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
+            .ok_or(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+            ))?;
+        let mut buf = vec![0u8; len];
         self.send_cmd(&command::encode_sensors(packet_id))?;
         self.read_exact(&mut buf)?;
         Ok(buf)
@@ -315,10 +320,12 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         buf: &mut [u8],
     ) -> Result<usize, Error<std::io::Error>> {
         self.reject_if_streaming()?;
-        let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
-            create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
-        ))?;
-        let len = info.len as usize;
+        let len = create_oi_protocol::opcode::packet_info(packet_id)
+            .map(|p| p.len as usize)
+            .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
+            .ok_or(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+            ))?;
         if buf.len() < len {
             return Err(Error::Protocol(
                 create_oi_protocol::error::ProtocolError::BufferTooSmall {
@@ -456,14 +463,13 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         Ok(())
     }
 
-    /// Send the POWER command, putting the robot into Passive charging mode.
+    /// Send the POWER command, powering down the robot.
     ///
-    /// After this call the robot enters Passive mode and begins charging.
-    /// The returned handle can be used to continue interactions or gracefully
-    /// transition to other modes. The stream state is cleared.
-    pub fn power_off(
-        mut self,
-    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+    /// After this call the OI is in Off mode. The robot powers down and
+    /// stops responding to OI commands. To resume, the robot must be
+    /// physically woken (e.g. Clean button, dock) and then `start()` called.
+    /// The stream state is cleared.
+    pub fn power_off(mut self) -> Result<Create<Off, T>, TransitionError<Self, std::io::Error>> {
         if let Err(e) = self.send_cmd(&command::encode_power()) {
             return Err(TransitionError {
                 create: self,
@@ -743,6 +749,44 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         let right_mm = (libm::roundf(v_mm + omega.get() * half_axle_mm) as i16).clamp(-500, 500);
         let left_mm = (libm::roundf(v_mm - omega.get() * half_axle_mm) as i16).clamp(-500, 500);
         self.send_cmd(&command::encode_drive_direct(right_mm, left_mm))
+    }
+
+    /// Initiate a cleaning cycle from Safe or Full mode. Transitions to Passive.
+    ///
+    /// Per the OI spec, CLEAN/SPOT/MAX are valid from Passive, Safe, or Full mode
+    /// and always transition the robot to Passive mode.
+    pub fn clean(
+        mut self,
+        mode: CleanMode,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        let cmd = match mode {
+            CleanMode::Default => command::encode_clean(),
+            CleanMode::Spot => command::encode_spot(),
+            CleanMode::Max => command::encode_max(),
+        };
+        if let Err(e) = self.send_cmd(&cmd) {
+            return Err(TransitionError {
+                create: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
+    }
+
+    /// Seek the dock from Safe or Full mode. Transitions to Passive.
+    ///
+    /// Per the OI spec, SEEK_DOCK is valid from Passive, Safe, or Full mode
+    /// and transitions the robot to Passive mode.
+    pub fn seek_dock(
+        mut self,
+    ) -> Result<Create<Passive, T>, TransitionError<Self, std::io::Error>> {
+        if let Err(e) = self.send_cmd(&command::encode_dock()) {
+            return Err(TransitionError {
+                create: self,
+                source: e,
+            });
+        }
+        Ok(self.transition())
     }
 }
 

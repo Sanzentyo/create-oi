@@ -68,7 +68,7 @@ impl AsyncTransport for SmolTransport {
         self.port.flush().await
     }
 
-    async fn delay(&self, duration: Duration) {
+    async fn delay(&mut self, duration: Duration) {
         smol::Timer::after(duration).await;
     }
 }
