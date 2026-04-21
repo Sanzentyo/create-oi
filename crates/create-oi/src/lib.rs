@@ -79,7 +79,7 @@ pub mod prelude {
     pub use crate::transport::Transport;
     pub use crate::types::{
         AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity,
-        MotorBits, MotorPower, PowerLedColor, Radius, SongNumber, Velocity,
+        MotorBits, MotorPower, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
     };
 
     // Selective protocol re-exports

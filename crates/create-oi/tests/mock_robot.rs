@@ -437,7 +437,7 @@ fn define_song_too_many_notes_rejects() {
     let bytes_before = robot.transport().written_bytes().len();
 
     // 17 notes — exceeds the 16-note OI spec limit
-    let notes = [(60u8, 32u8); 17];
+    let notes = [SongNote::new(60, 32).unwrap(); 17];
     let err = robot
         .define_song(SongNumber::new(0).unwrap(), &notes)
         .unwrap_err();
@@ -557,7 +557,10 @@ fn define_song_available_in_passive() {
     let robot = Create::new(mock, CreateRobotModel::Create2);
     // define_song should compile and succeed in Passive mode
     let mut robot = robot.start().unwrap();
-    let notes = [(69u8, 32u8), (71u8, 32u8)];
+    let notes = [
+        SongNote::new(69, 32).unwrap(),
+        SongNote::new(71, 32).unwrap(),
+    ];
     robot
         .define_song(SongNumber::new(0).unwrap(), &notes)
         .unwrap();
@@ -579,7 +582,9 @@ fn define_song_rejects_out_of_range_slot_for_create2() {
 
     // Slot 5 is valid for Create 1 (max=15) but not for Create 2 (max=4)
     let song = SongNumber::new(5).unwrap();
-    let err = robot.define_song(song, &[(69u8, 32u8)]).unwrap_err();
+    let err = robot
+        .define_song(song, &[SongNote::new(69, 32).unwrap()])
+        .unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for slot 5 on Create2, got {err:?}"
@@ -594,7 +599,9 @@ fn define_song_accepts_slot_15_for_create1() {
     let mut robot = robot.start().unwrap();
 
     let song = SongNumber::new(15).unwrap();
-    robot.define_song(song, &[(69u8, 32u8)]).unwrap();
+    robot
+        .define_song(song, &[SongNote::new(69, 32).unwrap()])
+        .unwrap();
     // Song opcode 140 must appear in the written bytes with song number 15 after it
     let written = robot.transport().written_bytes();
     let pos = written
@@ -640,4 +647,72 @@ fn start_stream_payload_overflow_rejects_before_send() {
         "expected ValidationError for oversized stream payload, got {err:?}"
     );
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// Round 5: streaming / query exclusion guard
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_sensor_raw_rejects_while_streaming() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+
+    // Packet 8 (wall) costs 2 bytes per cycle; use 1 → 2 bytes, well under 255
+    robot.start_stream(&[8u8]).unwrap();
+
+    let err = robot.query_sensor_raw(8).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError while streaming, got {err:?}"
+    );
+}
+
+#[test]
+fn query_resumes_after_toggle_stream_false() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+
+    robot.start_stream(&[8u8]).unwrap();
+    robot.toggle_stream(false).unwrap();
+
+    // After disabling the stream, sensor queries should be accepted again.
+    // (The mock just records the write; we only verify no ValidationError is raised.)
+    let result = robot.query_sensor_raw(8);
+    // Will error with Protocol::InsufficientData because mock has no read bytes loaded,
+    // but NOT with ValidationError.
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "should not get ValidationError after disabling stream"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 5: set_digit_leds ASCII validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_digit_leds_rejects_non_printable_ascii() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+
+    // Control character 0x01 is not printable ASCII
+    let err = robot.set_digit_leds(b'0', b'0', b'0', 0x01).unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError for non-printable ASCII, got {err:?}"
+    );
+}
+
+#[test]
+fn set_digit_leds_accepts_printable_ascii() {
+    let mock = MockTransport::new();
+    let robot = Create::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().unwrap().to_safe().unwrap();
+
+    // All printable ASCII: space (32) through tilde (126)
+    robot.set_digit_leds(b'1', b'2', b'3', b'4').unwrap();
 }

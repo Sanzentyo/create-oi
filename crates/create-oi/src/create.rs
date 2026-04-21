@@ -12,7 +12,7 @@ use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, Senso
 use crate::transport::Transport;
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
-    MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
+    MotorPower, OiMode, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
 };
 use create_oi_protocol::command;
 use create_oi_protocol::sensor::{self, SensorData};
@@ -35,6 +35,8 @@ pub struct Create<M: Mode, T: Transport> {
     transport: T,
     model: CreateRobotModel,
     stream_parser: StreamParser,
+    /// `true` while a sensor stream is active (after `start_stream`, before `toggle_stream(false)`).
+    streaming: bool,
     _mode: PhantomData<M>,
 }
 
@@ -50,6 +52,7 @@ impl<T: Transport> Create<Off, T> {
             transport,
             model,
             stream_parser: StreamParser::new(),
+            streaming: false,
             _mode: PhantomData,
         }
     }
@@ -197,8 +200,11 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query a single sensor packet by ID and return the raw bytes.
     ///
     /// Validates the packet ID before sending any bytes to the robot.
+    /// Returns `ValidationError` if a sensor stream is currently active;
+    /// call `toggle_stream(false)` first to pause the stream.
     #[must_use = "query result must be used"]
     pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<std::io::Error>> {
+        self.reject_if_streaming()?;
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
@@ -212,12 +218,14 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// Validates the packet ID and buffer size before sending any bytes to the robot.
     /// Returns the number of bytes written.
+    /// Returns `ValidationError` if a sensor stream is currently active.
     #[must_use = "query result must be used"]
     pub fn query_sensor_raw_into(
         &mut self,
         packet_id: u8,
         buf: &mut [u8],
     ) -> Result<usize, Error<std::io::Error>> {
+        self.reject_if_streaming()?;
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
@@ -247,8 +255,10 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Query multiple sensors at once and decode all of them.
     ///
     /// Validates all packet IDs before sending any bytes to the robot.
+    /// Returns `ValidationError` if a sensor stream is currently active.
     #[must_use = "query result must be used"]
     pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<std::io::Error>> {
+        self.reject_if_streaming()?;
         let expected_len = sensor::expected_data_len(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)?;
@@ -275,6 +285,10 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Returns an error if this robot model does not support sensor streaming,
     /// if the packet ID list exceeds the protocol limit, or if the total
     /// stream payload per cycle would exceed 255 bytes.
+    ///
+    /// Sets the internal streaming flag; while streaming, sensor query methods
+    /// (`query_sensor_raw`, `query_sensor_raw_into`, `query_list`) return
+    /// `ValidationError`. Call `toggle_stream(false)` to pause the stream first.
     pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
@@ -295,12 +309,15 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             }));
         }
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
-        self.send_cmd(&cmd)
+        self.send_cmd(&cmd)?;
+        self.streaming = true;
+        Ok(())
     }
 
     /// Pause or resume the sensor stream.
     ///
     /// Returns an error if this robot model does not support sensor streaming.
+    /// Updates the internal streaming flag (`enable = false` allows sensor queries again).
     pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
@@ -308,7 +325,9 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
-        self.send_cmd(&command::encode_toggle_stream(enable))
+        self.send_cmd(&command::encode_toggle_stream(enable))?;
+        self.streaming = enable;
+        Ok(())
     }
 
     /// Read bytes from the transport and try to parse stream frames.
@@ -415,10 +434,12 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Songs can be defined in Passive, Safe, and Full mode per the OI spec.
     /// Returns `ValidationError` if the song slot exceeds this model's maximum
     /// (Create 2: 0–4, Create 1 / Roomba 400: 0–15).
+    ///
+    /// Use [`SongNote::new`] to construct notes; MIDI note numbers must be 31..=127.
     pub fn define_song(
         &mut self,
         number: SongNumber,
-        notes: &[(u8, u8)],
+        notes: &[SongNote],
     ) -> Result<(), Error<std::io::Error>> {
         if number.get() > self.model.max_song_number() {
             return Err(Error::Validation(ValidationError {
@@ -426,7 +447,20 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 reason: "song slot exceeds this model's maximum",
             }));
         }
-        let cmd = command::encode_song(number.get(), notes).map_err(Error::Protocol)?;
+        if notes.len() > 16 {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::TooManyItems {
+                    max: 16,
+                    got: notes.len(),
+                },
+            ));
+        }
+        let mut raw = [(0u8, 0u8); 16];
+        let count = notes.len().min(16);
+        for (i, n) in notes.iter().enumerate().take(count) {
+            raw[i] = (n.midi_note, n.duration_64ths);
+        }
+        let cmd = command::encode_song(number.get(), &raw[..count]).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)
     }
 
@@ -504,6 +538,9 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
     }
 
     /// Display ASCII characters on the 7-segment displays.
+    ///
+    /// Each character must be a printable ASCII byte (32–126). Non-printable
+    /// bytes are rejected before any bytes are sent to the robot.
     pub fn set_digit_leds(
         &mut self,
         d3: u8,
@@ -511,6 +548,14 @@ impl<M: Actuatable, T: Transport> Create<M, T> {
         d1: u8,
         d0: u8,
     ) -> Result<(), Error<std::io::Error>> {
+        for (name, val) in [("d3", d3), ("d2", d2), ("d1", d1), ("d0", d0)] {
+            if !(32..=126).contains(&val) {
+                return Err(Error::Validation(ValidationError {
+                    field: name,
+                    reason: "digit LED character must be printable ASCII (32–126)",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
     }
 
@@ -713,6 +758,16 @@ impl<M: Mode, T: Transport> Create<M, T> {
         std::thread::sleep(self.model.mode_change_delay());
     }
 
+    fn reject_if_streaming(&self) -> Result<(), Error<std::io::Error>> {
+        if self.streaming {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor queries cannot be sent while streaming; call toggle_stream(false) first",
+            }));
+        }
+        Ok(())
+    }
+
     /// Transition to a different mode (zero-cost: just changes the type parameter).
     #[inline(always)]
     fn transition<N: Mode>(self) -> Create<N, T> {
@@ -720,6 +775,7 @@ impl<M: Mode, T: Transport> Create<M, T> {
             transport: self.transport,
             model: self.model,
             stream_parser: self.stream_parser,
+            streaming: self.streaming,
             _mode: PhantomData,
         }
     }

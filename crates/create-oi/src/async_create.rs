@@ -18,7 +18,7 @@ use crate::mode::{Actuatable, Full, FullControl, Mode, Off, Passive, Safe, Senso
 use crate::transport::AsyncTransport;
 use crate::types::{
     AngularVelocity, ButtonBits, CleanMode, CreateRobotModel, DayOfWeek, LedIntensity, MotorBits,
-    MotorPower, OiMode, PowerLedColor, Radius, SongNumber, Velocity,
+    MotorPower, OiMode, PowerLedColor, Radius, SongNote, SongNumber, Velocity,
 };
 use core::marker::PhantomData;
 use create_oi_protocol::command;
@@ -48,6 +48,8 @@ pub struct AsyncCreate<M: Mode, T: AsyncTransport> {
     transport: T,
     model: CreateRobotModel,
     stream_parser: StreamParser,
+    /// `true` while a sensor stream is active (after `start_stream`, before `toggle_stream(false)`).
+    streaming: bool,
     _mode: PhantomData<M>,
 }
 
@@ -63,6 +65,7 @@ impl<T: AsyncTransport> AsyncCreate<Off, T> {
             transport,
             model,
             stream_parser: StreamParser::new(),
+            streaming: false,
             _mode: PhantomData,
         }
     }
@@ -222,6 +225,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         packet_id: u8,
         buf: &mut [u8],
     ) -> Result<usize, Error<T::Error>> {
+        self.reject_if_streaming()?;
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
@@ -245,6 +249,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[cfg(feature = "alloc")]
     #[must_use = "query result must be used"]
     pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<T::Error>> {
+        self.reject_if_streaming()?;
         let info = create_oi_protocol::opcode::packet_info(packet_id).ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
         ))?;
@@ -276,6 +281,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// sync `Create::query_list` which allocates a `Vec`.
     #[must_use = "query result must be used"]
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+        self.reject_if_streaming()?;
         // Cap at Group-100 size to match the stack buffer below.
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
@@ -349,7 +355,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut buf = [0u8; MAX_CMD];
         let len = command::encode_stream_into(&mut buf, packet_ids)?;
-        self.send_cmd(&buf[..len]).await
+        self.send_cmd(&buf[..len]).await?;
+        self.streaming = true;
+        Ok(())
     }
 
     /// Pause or resume the sensor stream.
@@ -362,7 +370,10 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
-        self.send_cmd(&command::encode_toggle_stream(enable)).await
+        self.send_cmd(&command::encode_toggle_stream(enable))
+            .await?;
+        self.streaming = enable;
+        Ok(())
     }
 
     /// Read bytes from the transport and try to parse stream frames.
@@ -470,10 +481,12 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Songs can be defined in Passive, Safe, and Full mode per the OI spec.
     /// Returns `ValidationError` if the song slot exceeds this model's maximum
     /// (Create 2: 0–4, Create 1 / Roomba 400: 0–15).
+    ///
+    /// Use [`SongNote::new`] to construct notes; MIDI note numbers must be 31..=127.
     pub async fn define_song(
         &mut self,
         number: SongNumber,
-        notes: &[(u8, u8)],
+        notes: &[SongNote],
     ) -> Result<(), Error<T::Error>> {
         if number.get() > self.model.max_song_number() {
             return Err(Error::Validation(ValidationError {
@@ -481,8 +494,21 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "song slot exceeds this model's maximum",
             }));
         }
+        if notes.len() > 16 {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::TooManyItems {
+                    max: 16,
+                    got: notes.len(),
+                },
+            ));
+        }
+        let mut raw = [(0u8, 0u8); 16];
+        let count = notes.len().min(16);
+        for (i, n) in notes.iter().enumerate().take(count) {
+            raw[i] = (n.midi_note, n.duration_64ths);
+        }
         let mut buf = [0u8; 35]; // 1 opcode + 1 song_number + 1 count + 16*2 notes = 35
-        let len = command::encode_song_into(&mut buf, number.get(), notes)?;
+        let len = command::encode_song_into(&mut buf, number.get(), &raw[..count])?;
         self.send_cmd(&buf[..len]).await
     }
 
@@ -564,6 +590,9 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
     }
 
     /// Display ASCII characters on the 7-segment displays.
+    ///
+    /// Each character must be a printable ASCII byte (32–126). Non-printable
+    /// bytes are rejected before any bytes are sent to the robot.
     pub async fn set_digit_leds(
         &mut self,
         d3: u8,
@@ -571,6 +600,14 @@ impl<M: Actuatable, T: AsyncTransport> AsyncCreate<M, T> {
         d1: u8,
         d0: u8,
     ) -> Result<(), Error<T::Error>> {
+        for (name, val) in [("d3", d3), ("d2", d2), ("d1", d1), ("d0", d0)] {
+            if !(32..=126).contains(&val) {
+                return Err(Error::Validation(ValidationError {
+                    field: name,
+                    reason: "digit LED character must be printable ASCII (32–126)",
+                }));
+            }
+        }
         self.send_cmd(&command::encode_digit_leds_ascii(d3, d2, d1, d0))
             .await
     }
@@ -751,6 +788,16 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
         &mut self.transport
     }
 
+    fn reject_if_streaming(&self) -> Result<(), Error<T::Error>> {
+        if self.streaming {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "sensor queries cannot be sent while streaming; call toggle_stream(false) first",
+            }));
+        }
+        Ok(())
+    }
+
     /// Send raw bytes to the robot.
     async fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<T::Error>> {
         self.transport.write_all(data).await.map_err(Error::Io)?;
@@ -791,6 +838,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
             transport: self.transport,
             model: self.model,
             stream_parser: self.stream_parser,
+            streaming: self.streaming,
             _mode: PhantomData,
         }
     }

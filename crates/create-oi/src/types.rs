@@ -212,13 +212,19 @@ impl core::fmt::Display for Velocity {
     }
 }
 
-/// Angular velocity in rad/s. Valid range: [-π, π].
+/// Angular velocity in rad/s.
+///
+/// The maximum achievable value is derived from the Create 2 geometry:
+/// `ω_max = 2 × MAX_VELOCITY_M_S / AXLE_LENGTH_CREATE2_M ≈ 4.26 rad/s`.
+/// `drive_twist()` clamps wheel speeds regardless, so values near this limit
+/// are allowed even if the robot cannot physically achieve them precisely.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct AngularVelocity(f32);
 
 impl AngularVelocity {
-    pub const MAX: f32 = core::f32::consts::PI;
-    pub const MIN: f32 = -core::f32::consts::PI;
+    /// Maximum angular velocity (rad/s): in-place spin at full wheel speed on Create 2.
+    pub const MAX: f32 = 2.0 * MAX_VELOCITY_M_S / AXLE_LENGTH_CREATE2_M;
+    pub const MIN: f32 = -(2.0 * MAX_VELOCITY_M_S / AXLE_LENGTH_CREATE2_M);
 
     pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("AngularVelocity", value)?;
@@ -509,6 +515,36 @@ impl core::fmt::Display for SongNumber {
 // ---------------------------------------------------------------------------
 // Motor and button bitfield types
 // ---------------------------------------------------------------------------
+
+/// A validated song note: MIDI pitch number and duration.
+///
+/// OI spec §5.13: note numbers must be in 31..=127. Duration is in 1/64-second
+/// increments (0–255, where 0 means "play for 0 frames" and 255 ≈ 3.98 s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SongNote {
+    /// MIDI note number (31–127).
+    pub midi_note: u8,
+    /// Duration in units of 1/64 second (0–255).
+    pub duration_64ths: u8,
+}
+
+impl SongNote {
+    /// Create a new `SongNote`, validating that `midi_note` is in 31..=127.
+    ///
+    /// Duration is unconstrained (0–255 covers the full spec range).
+    pub const fn new(midi_note: u8, duration_64ths: u8) -> Result<Self, ValidationError> {
+        if midi_note < 31 || midi_note > 127 {
+            return Err(ValidationError {
+                field: "midi_note",
+                reason: "MIDI note number must be in range 31..=127 (OI spec §5.13)",
+            });
+        }
+        Ok(Self {
+            midi_note,
+            duration_64ths,
+        })
+    }
+}
 
 /// Motor enable and direction bits for the MOTORS command (opcode 138).
 ///
@@ -836,7 +872,10 @@ mod tests {
         assert!(AngularVelocity::try_from(0.0_f32).is_ok());
         assert!(AngularVelocity::try_from(core::f32::consts::PI).is_ok());
         assert!(AngularVelocity::try_from(-core::f32::consts::PI).is_ok());
-        assert!(AngularVelocity::try_from(4.0_f32).is_err()); // > π
+        // MAX ≈ 4.255 rad/s (2 × 0.5 / 0.235); 4.0 is now valid, 5.0 is not
+        assert!(AngularVelocity::try_from(4.0_f32).is_ok());
+        assert!(AngularVelocity::try_from(5.0_f32).is_err());
+        assert!(AngularVelocity::try_from(-5.0_f32).is_err());
         assert!(AngularVelocity::try_from(f32::NAN).is_err());
     }
 

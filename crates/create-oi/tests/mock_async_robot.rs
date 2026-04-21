@@ -524,7 +524,10 @@ async fn async_define_song_available_in_passive() {
     let mock = MockAsyncTransport::new();
     let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
     let mut robot = robot.start().await.unwrap();
-    let notes = [(69u8, 32u8), (71u8, 32u8)];
+    let notes = [
+        SongNote::new(69, 32).unwrap(),
+        SongNote::new(71, 32).unwrap(),
+    ];
     robot
         .define_song(SongNumber::new(0).unwrap(), &notes)
         .await
@@ -546,7 +549,10 @@ async fn async_define_song_rejects_out_of_range_slot_for_create2() {
     let bytes_before = robot.transport().written_bytes().len();
 
     let song = SongNumber::new(5).unwrap();
-    let err = robot.define_song(song, &[(69u8, 32u8)]).await.unwrap_err();
+    let err = robot
+        .define_song(song, &[SongNote::new(69, 32).unwrap()])
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError for slot 5 on Create2, got {err:?}"
@@ -561,7 +567,10 @@ async fn async_define_song_accepts_slot_15_for_create1() {
     let mut robot = robot.start().await.unwrap();
 
     let song = SongNumber::new(15).unwrap();
-    robot.define_song(song, &[(69u8, 32u8)]).await.unwrap();
+    robot
+        .define_song(song, &[SongNote::new(69, 32).unwrap()])
+        .await
+        .unwrap();
     let written = robot.transport().written_bytes();
     let pos = written
         .iter()
@@ -606,4 +615,69 @@ async fn async_start_stream_payload_overflow_rejects_before_send() {
         "expected ValidationError for oversized stream payload, got {err:?}"
     );
     assert_eq!(robot.transport().written_bytes().len(), bytes_before);
+}
+
+// ---------------------------------------------------------------------------
+// Round 5: streaming / query exclusion guard
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_query_sensor_raw_rejects_while_streaming() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+
+    robot.start_stream(&[8u8]).await.unwrap();
+
+    let err = robot.query_sensor_raw(8).await.unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError while streaming, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn async_query_resumes_after_toggle_stream_false() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+
+    robot.start_stream(&[8u8]).await.unwrap();
+    robot.toggle_stream(false).await.unwrap();
+
+    // After disabling the stream, sensor queries should not raise ValidationError.
+    let result = robot.query_sensor_raw(8).await;
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "should not get ValidationError after disabling stream"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Round 5: set_digit_leds ASCII validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_set_digit_leds_rejects_non_printable_ascii() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+
+    let err = robot
+        .set_digit_leds(b'0', b'0', b'0', 0x01)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, create_oi::error::Error::Validation(_)),
+        "expected ValidationError for non-printable ASCII, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn async_set_digit_leds_accepts_printable_ascii() {
+    let mock = MockAsyncTransport::new();
+    let robot = AsyncCreate::new(mock, CreateRobotModel::Create2);
+    let mut robot = robot.start().await.unwrap().to_safe().await.unwrap();
+
+    robot.set_digit_leds(b'1', b'2', b'3', b'4').await.unwrap();
 }
