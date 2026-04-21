@@ -506,3 +506,30 @@ in Off mode.
 - LED bit layout: Create2 uses low bits (0–3), Roomba400 uses high bits (3–6) (sync + async)
 - Straight sentinel: Radius::Straight encodes to i16::MIN (bytes [0x80, 0x00])
 - Updated baud round-trip test: from_code now covers 0–11
+
+---
+
+## Round 16: Comprehensive Examples Coverage
+
+**Process:** Lateral thinking audit (waterfall approach after Round 15) identified missing example coverage across all implemented features. Parallel agents hit API rate limits; work executed directly. Rubber-duck review caught 3 bugs (bitmask, stream multi-frame, round_sync semantics).
+
+**Added examples:**
+
+| Crate | File | Features demonstrated |
+|-------|------|-----------------------|
+| create-oi-serial | `leds_sync.rs` | `set_leds`, `set_scheduling_leds`, `set_digit_leds`, `set_digit_leds_raw` |
+| create-oi-serial | `songs_sync.rs` | `define_song`, `play_song`, `SongNote`, `SongNumber` |
+| create-oi-serial | `full_sync.rs` | `to_full`, `drive_direct`, `drive_twist`, `drive_pwm`, `set_motors`, `set_motors_pwm`, `simulate_buttons` |
+| create-oi-serial | `stream_sync.rs` | `start_stream`, `poll_stream_with`, `toggle_stream` |
+| create-oi-serial | `sensors_sync.rs` | `query_sensor`, `query_list`, `read_oi_mode` |
+| create-oi-serial | `schedule_sync.rs` | `set_date`, `set_schedule`, `DayOfWeek` |
+| create-oi-serial | `round_sync.rs` | **Replaced duplicate** with `clean(Spot)` + `seek_dock` |
+| create-oi-tokio | `stream_tokio.rs` | Async streaming (was missing from tokio crate) |
+| create-oi-tokio | `leds_tokio.rs` | Async LED control |
+
+**Bugs caught by rubber-duck review:**
+1. `schedule_sync.rs`: day bitmask `0b000_1010` ≠ Monday+Thursday; fixed to `0b001_0010`
+2. `stream_sync.rs` / `stream_tokio.rs`: `== 15` frame check could be skipped on multi-frame reads; fixed to `>= 15` with `paused` flag
+3. `round_sync.rs`: doc comment said "observe while cleaning" but code reclaims control; clarified
+
+**Verification:** All 9 examples compile clean under `cargo check --all-targets` and `just ci` (301 tests).

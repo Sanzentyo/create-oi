@@ -19,3 +19,32 @@ create-oi = { workspace = true, features = ["std"] }
 [[example]]
 name = "basic_sync"
 path = "examples/basic_sync.rs"
+
+[[example]]
+name = "round_sync"
+path = "examples/round_sync.rs"
+
+[[example]]
+name = "leds_sync"
+path = "examples/leds_sync.rs"
+
+[[example]]
+name = "songs_sync"
+path = "examples/songs_sync.rs"
+
+[[example]]
+name = "full_sync"
+path = "examples/full_sync.rs"
+
+[[example]]
+name = "stream_sync"
+path = "examples/stream_sync.rs"
+
+[[example]]
+name = "sensors_sync"
+path = "examples/sensors_sync.rs"
+
+[[example]]
+name = "schedule_sync"
+path = "examples/schedule_sync.rs"
+

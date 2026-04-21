@@ -1,0 +1,124 @@
+//! Full-mode and advanced drive example using `SerialTransport`.
+//!
+//! Demonstrates features available in Full mode (no safety cutoffs):
+//! - `to_full` — transition from Safe to Full mode
+//! - `drive_direct` — independent per-wheel velocity (Create 1/2 only)
+//! - `drive_twist` — cmd_vel–style linear + angular velocity (Create 1/2 only)
+//! - `drive_pwm` — per-wheel PWM drive (Create 2 only)
+//! - `set_motors` — enable/disable cleaning brushes
+//! - `set_motors_pwm` — fine-grained brush motor PWM (Create 2 only)
+//! - `simulate_buttons` — programmatically press robot buttons (Full mode only)
+//!
+//! **Note:** In Full mode the robot ignores cliff/wheel-drop safety cutoffs.
+//! Always return to Safe mode before leaving the robot unattended.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run --example full_sync -- /dev/ttyUSB0
+//! ```
+
+use std::thread::sleep;
+use std::time::Duration;
+
+use create_oi::prelude::*;
+use create_oi_serial::SerialTransport;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let port = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/dev/ttyUSB0".into());
+
+    println!("Opening {port}...");
+    let transport = SerialTransport::open(&port, RobotModel::Create2)?;
+
+    let create = Create::new(transport, RobotModel::Create2);
+    let create = create.start().map_err(|e| e.source)?;
+    let create = create.to_safe().map_err(|e| e.source)?;
+
+    // --- Transition to Full mode ---
+    println!("Entering Full mode...");
+    let mut create = create.to_full().map_err(|e| e.source)?;
+
+    // --- drive_direct: per-wheel velocity (left, right independently) ---
+    // Positive = forward, negative = reverse. Range: -0.5 m/s to +0.5 m/s.
+    println!("drive_direct: gentle left arc (right faster than left)...");
+    create.drive_direct(Velocity::new(0.15)?, Velocity::new(0.08)?)?;
+    sleep(Duration::from_secs(2));
+    create.stop()?;
+    sleep(Duration::from_millis(300));
+
+    // Spin in place: right wheel forward, left wheel reverse
+    println!("drive_direct: spin in place...");
+    create.drive_direct(Velocity::new(0.1)?, Velocity::new(-0.1)?)?;
+    sleep(Duration::from_secs(1));
+    create.stop()?;
+    sleep(Duration::from_millis(300));
+
+    // --- drive_twist: cmd_vel-style (linear velocity + angular velocity) ---
+    // velocity: forward speed in m/s; omega: angular rate in rad/s (positive = left/CCW)
+    println!("drive_twist: forward 0.2 m/s, curving left at 0.5 rad/s...");
+    create.drive_twist(Velocity::new(0.2)?, AngularVelocity::new(0.5)?)?;
+    sleep(Duration::from_secs(2));
+    create.stop()?;
+    sleep(Duration::from_millis(300));
+
+    // --- drive_pwm: direct PWM [-1.0, 1.0] (Create 2 only) ---
+    println!("drive_pwm: right 60% forward, left 40% forward...");
+    create.drive_pwm(MotorPower::new(0.6)?, MotorPower::new(0.4)?)?;
+    sleep(Duration::from_secs(2));
+    create.stop()?;
+    sleep(Duration::from_millis(300));
+
+    // --- set_motors: enable cleaning brushes ---
+    println!("set_motors: main brush + vacuum + side brush on...");
+    create.set_motors(MotorBits {
+        side_brush: true,
+        vacuum: true,
+        main_brush: true,
+        side_brush_backward: false,
+        main_brush_backward: false,
+    })?;
+    sleep(Duration::from_secs(2));
+
+    // Reverse main brush direction
+    println!("set_motors: main brush reversed...");
+    create.set_motors(MotorBits {
+        side_brush: false,
+        vacuum: false,
+        main_brush: true,
+        side_brush_backward: false,
+        main_brush_backward: true,
+    })?;
+    sleep(Duration::from_secs(1));
+
+    // All motors off
+    create.set_motors(MotorBits::default())?;
+    sleep(Duration::from_millis(300));
+
+    // --- set_motors_pwm: fine-grained brush PWM (Create 2 only) ---
+    // Raw values: main_brush: i8 (-127..=127), side_brush: i8, vacuum: u8 (0..=127)
+    println!("set_motors_pwm: brushes at ~50% power...");
+    create.set_motors_pwm(64, 64, 64)?;
+    sleep(Duration::from_secs(2));
+    create.set_motors_pwm(0, 0, 0)?;
+
+    // --- simulate_buttons (Full mode only) ---
+    // Simulate pressing the Spot button programmatically
+    println!("simulate_buttons: pressing Spot button...");
+    create.simulate_buttons(ButtonBits {
+        spot: true,
+        ..ButtonBits::default()
+    })?;
+    sleep(Duration::from_millis(200));
+    // Release (all buttons up)
+    create.simulate_buttons(ButtonBits::default())?;
+
+    // Return to Safe mode, then Passive
+    println!("Returning to Safe, then Passive...");
+    let create = create.to_safe().map_err(|e| e.source)?;
+    let _create = create.to_passive().map_err(|e| e.source)?;
+
+    println!("Done!");
+    Ok(())
+}

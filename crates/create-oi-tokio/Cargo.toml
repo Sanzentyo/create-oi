@@ -21,3 +21,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 [[example]]
 name = "basic_tokio"
 path = "examples/basic_tokio.rs"
+
+[[example]]
+name = "stream_tokio"
+path = "examples/stream_tokio.rs"
+
+[[example]]
+name = "leds_tokio"
+path = "examples/leds_tokio.rs"
+
