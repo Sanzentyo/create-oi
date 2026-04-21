@@ -1,8 +1,8 @@
 //! Play a MIDI file on the robot using `TokioTransport`.
 //!
 //! See `play_midi_sync` for a full explanation of the sequential playback
-//! strategy.  This variant uses Tokio async I/O and `tokio::time::sleep`
-//! for the chunk-duration wait.
+//! strategy and timing considerations.  This variant uses Tokio async I/O
+//! and `tokio::time::sleep` for the chunk-duration wait.
 
 use std::env;
 use std::time::{Duration, Instant};
@@ -11,8 +11,9 @@ use create_oi::midi::{MidiConfig, midi_to_notes, notes_to_chunks};
 use create_oi::prelude::*;
 use create_oi_tokio::TokioTransport;
 
-/// See `play_midi_sync` for rationale.
-const SONG_TIMING_BUFFER: Duration = Duration::from_millis(3);
+/// See `play_midi_sync` for rationale.  50 ms is conservative; reduce once
+/// playback is confirmed clean.
+const SONG_TIMING_BUFFER: Duration = Duration::from_millis(50);
 
 fn chunk_duration(chunk: &[SongNote]) -> Duration {
     Duration::from_micros(
@@ -59,16 +60,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let create = create.start().await.map_err(|e| e.source)?;
     let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
-    let slot = SongNumber::new(0)?;
+    let slots = [SongNumber::new(0)?, SongNumber::new(1)?];
 
     for (i, chunk) in chunks.iter().enumerate() {
+        let slot = slots[i % 2];
         let dur = chunk_duration(chunk);
+        let pitch_min = chunk.iter().map(|note| note.midi_note()).min().unwrap_or(0);
+        let pitch_max = chunk.iter().map(|note| note.midi_note()).max().unwrap_or(0);
         println!(
-            "Chunk {}/{}: {} notes, {:.3}s",
+            "Chunk {}/{}: slot={} notes={} dur={:.3}s pitches={}..{}",
             i + 1,
             n,
+            i % 2,
             chunk.len(),
-            dur.as_secs_f64()
+            dur.as_secs_f64(),
+            pitch_min,
+            pitch_max,
         );
 
         create.define_song(slot, chunk).await?;
