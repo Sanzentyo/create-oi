@@ -1130,3 +1130,55 @@ A `VoiceArg` clap `ValueEnum` is defined locally in each example and converted t
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean
 - `cargo fmt --all`: applied
 - `just check-nostd`: all 4 no_std / embedded builds pass
+
+---
+
+## Round 29 — midi.rs module split + `limit_voices` polyphony reducer
+
+### Goals
+
+1. Split the 2014-line `crates/create-oi/src/midi.rs` into a proper Rust module
+2. Add `limit_voices` polyphony reducer (N simultaneous voices → M before monophonization)
+3. Add `max_voices: Option<NonZeroUsize>` to `MidiConfig` and `--max-voices` / `-p` CLI flag
+
+### Module split
+
+`src/midi.rs` is the module root; submodules live under `src/midi/`:
+
+| File | Contents |
+|------|----------|
+| `midi/config.rs` | `VoiceSelection`, `MidiConfig` (incl. new `max_voices`), `MidiError` |
+| `midi/events.rs` | `TempoChange`, `NoteEvent`, `build_tempo_map`, `collect_note_events`, helpers (all `pub(super)`) |
+| `midi/voice_reduce.rs` | `monophonize_events` (moved), `limit_voices` (new), `rank_and_keep` (private) |
+| `midi/parse.rs` | `midi_to_notes`, `single_track_notes`, `notes_to_chunks`, `midi_initial_tempo` |
+
+`extern crate alloc;` moved to `lib.rs` crate root so child modules can `use alloc::...` directly.
+
+### `limit_voices` algorithm
+
+- **Per-tick batching** via `partition_point` — all events at the same tick are processed atomically
+- Step 1: NoteOffs applied; only emitted if note is in the `active` map (prevents spurious second NoteOff for evicted notes)
+- Step 2: Snapshot `pre_keys` (notes active before new NoteOns arrive at this tick)
+- Step 3: Register all NoteOns in `active`
+- Step 4: If `active.len() > max_voices`, call `rank_and_keep`, evict excess:
+  - Sustained note (in `pre_keys`) → emit synthetic NoteOff
+  - New NoteOn (not in `pre_keys`) → suppressed, no event emitted
+- Output ordering within a tick: original NoteOffs → synthetic NoteOffs → kept NoteOns
+
+### CLI change
+
+All three `play_midi` examples now accept `--max-voices` (short `-p`):
+
+```
+--max-voices N   limit polyphony to N simultaneous voices before monophonization
+```
+
+Uses `Option<NonZeroUsize>` as the clap arg type (parsed via `FromStr`).
+
+### Test results
+
+- `cargo test --workspace --features midi`: **363 tests passed** (100 midi + 85 async + 104 sync + 71 protocol)
+- 8 new `limit_voices` unit tests + 1 integration test via `midi_to_notes`
+- `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
+- `cargo fmt --all`: applied
+- `just check-nostd`: all 4 no_std / embedded builds pass
