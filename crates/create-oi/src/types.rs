@@ -668,27 +668,33 @@ impl core::fmt::Display for SongNumber {
 // Motor and button bitfield types
 // ---------------------------------------------------------------------------
 
-/// A validated song note: MIDI pitch number and duration.
+/// A validated song note (or rest): MIDI pitch number and duration.
 ///
-/// OI spec §5.13: note numbers must be in 31..=127. Duration is in 1/64-second
-/// increments (0–255, where 0 means "play for 0 frames" and 255 ≈ 3.98 s).
+/// OI spec §5.13: note numbers must be in 31..=127 for audible notes.
+/// Pitch **0** encodes a **rest** (silence for the specified duration), which
+/// is accepted by the Create 2 firmware even though the spec does not document
+/// it explicitly.  Pitches 1–30 and 128–255 are invalid.
+///
+/// Duration is in 1/64-second increments (0–255, where 0 means "play for
+/// 0 frames" and 255 ≈ 3.98 s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SongNote {
-    /// MIDI note number (31–127).
+    /// MIDI note number (0 = rest, 31–127 = audible note).
     midi_note: u8,
     /// Duration in units of 1/64 second (0–255).
     duration_64ths: u8,
 }
 
 impl SongNote {
-    /// Create a new `SongNote`, validating that `midi_note` is in 31..=127.
+    /// Create a new `SongNote`, validating that `midi_note` is 0 (rest) or
+    /// in 31..=127 (audible note). Values 1–30 and 128–255 are rejected.
     ///
     /// Duration is unconstrained (0–255 covers the full spec range).
     pub const fn new(midi_note: u8, duration_64ths: u8) -> Result<Self, ValidationError> {
-        if midi_note < 31 || midi_note > 127 {
+        if midi_note > 0 && (midi_note < 31 || midi_note > 127) {
             return Err(ValidationError {
                 field: "midi_note",
-                reason: "MIDI note number must be in range 31..=127 (OI spec §5.13)",
+                reason: "MIDI note number must be 0 (rest) or in range 31..=127 (OI spec §5.13)",
             });
         }
         Ok(Self {
@@ -697,7 +703,25 @@ impl SongNote {
         })
     }
 
-    /// Returns the MIDI note number (31–127).
+    /// Create a rest note (silence) with the given duration.
+    ///
+    /// A rest is encoded as MIDI note 0, which the Create 2 firmware treats
+    /// as silence for the specified duration.
+    #[inline(always)]
+    pub const fn rest(duration_64ths: u8) -> Self {
+        Self {
+            midi_note: 0,
+            duration_64ths,
+        }
+    }
+
+    /// Returns `true` if this note is a rest (pitch = 0).
+    #[inline(always)]
+    pub const fn is_rest(self) -> bool {
+        self.midi_note == 0
+    }
+
+    /// Returns the MIDI note number (0 = rest, 31–127 = audible note).
     #[inline(always)]
     pub const fn midi_note(self) -> u8 {
         self.midi_note
@@ -930,11 +954,25 @@ mod tests {
 
     #[test]
     fn song_note_invalid_midi() {
+        // Pitches 1–30 are invalid (below audible range, not a rest).
         assert!(SongNote::new(30, 32).is_err());
+        assert!(SongNote::new(1, 32).is_err());
+        // Pitches above 127 are invalid.
         assert!(SongNote::new(128, 32).is_err());
         // Boundary values
         assert!(SongNote::new(31, 0).is_ok());
         assert!(SongNote::new(127, 255).is_ok());
+        // Pitch 0 is a valid rest.
+        assert!(SongNote::new(0, 64).is_ok());
+    }
+
+    #[test]
+    fn song_note_rest() {
+        let rest = SongNote::rest(32);
+        assert_eq!(rest.midi_note(), 0);
+        assert_eq!(rest.duration_64ths(), 32);
+        assert!(rest.is_rest());
+        assert!(!SongNote::new(60, 32).unwrap().is_rest());
     }
 
     #[test]

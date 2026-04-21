@@ -13,9 +13,11 @@
 //!
 //! # Limitations
 //!
-//! - **Rests are dropped**: gaps between notes are lost because the robot's
-//!   song format has no silence representation. All emitted notes play
-//!   back-to-back.
+//! - **Rests are optional**: by default, gaps between notes are dropped because
+//!   the robot's song format has no silence representation. Enable
+//!   [`MidiConfig::include_rests`] to encode silence as rest notes (pitch 0).
+//!   Use [`MidiConfig::trim_start`] and [`MidiConfig::trim_end`] to control
+//!   whether leading/trailing silence is included.
 //! - **MIDI Format 2** (sequential multi-song) is not supported.
 //! - **SMPTE timecode** is not supported; use metrical timing.
 //!
@@ -91,6 +93,23 @@ pub struct MidiConfig {
     ///
     /// Works in both single-track and multi-track merge modes.
     pub channel: Option<u8>,
+    /// When `true`, silence gaps between notes are encoded as rest notes
+    /// (MIDI pitch 0) in the output. Default: `false` (gaps are dropped so
+    /// that notes play back-to-back, which is the robot's native behaviour).
+    ///
+    /// Note spans with out-of-range pitches (those that would be dropped by
+    /// the converter) are treated as silence for this purpose.
+    pub include_rests: bool,
+    /// Trim the leading silence before the first audible note.
+    ///
+    /// Only effective when [`include_rests`](Self::include_rests) is `true`.
+    /// Default: `true`.
+    pub trim_start: bool,
+    /// Trim the trailing silence after the last audible note.
+    ///
+    /// Only effective when [`include_rests`](Self::include_rests) is `true`.
+    /// Default: `true`.
+    pub trim_end: bool,
 }
 
 impl Default for MidiConfig {
@@ -102,6 +121,9 @@ impl Default for MidiConfig {
             voice_selection: VoiceSelection::default(),
             filter_percussion: true,
             channel: None,
+            include_rests: false,
+            trim_start: true,
+            trim_end: true,
         }
     }
 }
@@ -329,17 +351,30 @@ fn collect_note_events(
 /// Zero-duration segments (two NoteOn events at the exact same tick) are
 /// discarded. Dangling notes with no NoteOff are emitted at the end with their
 /// accumulated duration (or clamped to 1 robot unit if duration is zero).
+///
+/// When `include_rests` is `true`, silence gaps (including spans where the
+/// winner is out of the 31–127 range) are emitted as rest notes (pitch 0).
+#[allow(clippy::too_many_arguments)]
 fn monophonize_events(
     events: &[NoteEvent],
     voice_selection: VoiceSelection,
     tempo_map: &[TempoChange],
     ticks_per_beat: u32,
+    include_rests: bool,
+    trim_start: bool,
+    trim_end: bool,
+    track_end_tick: u64,
 ) -> Vec<SongNote> {
     let mut active: BTreeMap<u8, u32> = BTreeMap::new(); // pitch → active count
     let mut current_winner: Option<u8> = None;
     let mut segment_start: u64 = 0;
     let mut last_tick: u64 = 0;
     let mut notes: Vec<SongNote> = Vec::new();
+
+    // Start of the current silence gap; `Some(0)` tracks leading silence.
+    let mut rest_start: Option<u64> = if include_rests { Some(0) } else { None };
+    // Whether any audible note has been started yet.
+    let mut first_note_started = false;
 
     for event in events {
         last_tick = event.abs_tick;
@@ -362,7 +397,7 @@ fn monophonize_events(
         };
 
         if new_winner != current_winner {
-            // Flush previous segment only if it has nonzero duration.
+            // Flush the previous segment.
             if let Some(pitch) = current_winner {
                 let dur = event.abs_tick.saturating_sub(segment_start);
                 if dur > 0 {
@@ -370,9 +405,47 @@ fn monophonize_events(
                         make_note(pitch, segment_start, dur, tempo_map, ticks_per_beat)
                     {
                         notes.push(note);
+                        // Audible note ended; silence starts here.
+                        if include_rests {
+                            rest_start = Some(event.abs_tick);
+                        }
                     }
+                    // Out-of-range segment: rest_start unchanged (silence continues).
                 }
             }
+            // previous was None (silence) — rest_start already set; no flush needed.
+
+            // Start the new segment.
+            match new_winner {
+                Some(new_pitch) if (31u8..=127).contains(&new_pitch) => {
+                    // Audible note starting: emit any pending rest.
+                    if include_rests {
+                        if let Some(rs) = rest_start.take() {
+                            let is_leading = !first_note_started;
+                            if !(trim_start && is_leading) {
+                                if let Some(rest) =
+                                    make_rest(rs, event.abs_tick - rs, tempo_map, ticks_per_beat)
+                                {
+                                    notes.push(rest);
+                                }
+                            }
+                        }
+                    }
+                    first_note_started = true;
+                }
+                Some(_) => {
+                    // Out-of-range winner: treat as silence.
+                    // Open rest_start if not already tracking silence.
+                    if include_rests && rest_start.is_none() {
+                        rest_start = Some(event.abs_tick);
+                    }
+                }
+                None => {
+                    // No active notes: silence.
+                    // rest_start was already set when the last note ended (above).
+                }
+            }
+
             segment_start = event.abs_tick;
             current_winner = new_winner;
         }
@@ -383,6 +456,20 @@ fn monophonize_events(
         let dur = last_tick.saturating_sub(segment_start);
         if let Some(note) = make_note(pitch, segment_start, dur, tempo_map, ticks_per_beat) {
             notes.push(note);
+            if include_rests {
+                rest_start = Some(last_tick);
+            }
+        }
+        // Out-of-range dangling note: rest_start unchanged.
+    }
+
+    // Trailing rest (after last audible note, up to track end).
+    if include_rests && !trim_end {
+        let effective_end = track_end_tick.max(last_tick);
+        if let Some(rs) = rest_start {
+            if let Some(rest) = make_rest(rs, effective_end - rs, tempo_map, ticks_per_beat) {
+                notes.push(rest);
+            }
         }
     }
 
@@ -411,8 +498,10 @@ fn monophonize_events(
 ///
 /// # Rests
 ///
-/// Silence between notes is **dropped** in both modes. The robot's song format
-/// has no rest representation; all emitted notes play back-to-back.
+/// By default, silence between notes is dropped. Enable
+/// [`MidiConfig::include_rests`] to encode gaps as rest notes (pitch 0).
+/// Use [`MidiConfig::trim_start`] / [`MidiConfig::trim_end`] to control
+/// whether leading/trailing silence is included.
 ///
 /// # Errors
 ///
@@ -454,10 +543,26 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
         });
     }
 
+    // Compute the track end tick only when needed (trailing rest support).
+    let track_end_tick = if config.include_rests && !config.trim_end {
+        find_max_track_end_tick(&smf)
+    } else {
+        0
+    };
+
     let notes = if config.merge_all_tracks {
         let mut events = collect_note_events(&smf, config.filter_percussion, config.channel);
         events.sort_unstable();
-        monophonize_events(&events, config.voice_selection, &tempo_map, ticks_per_beat)
+        monophonize_events(
+            &events,
+            config.voice_selection,
+            &tempo_map,
+            ticks_per_beat,
+            config.include_rests,
+            config.trim_start,
+            config.trim_end,
+            track_end_tick,
+        )
     } else {
         single_track_notes(
             &smf,
@@ -465,6 +570,9 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
             config.channel,
             &tempo_map,
             ticks_per_beat,
+            config.include_rests,
+            config.trim_start,
+            config.trim_end,
         )?
     };
 
@@ -476,12 +584,16 @@ pub fn midi_to_notes(midi_bytes: &[u8], config: &MidiConfig) -> Result<Vec<SongN
 }
 
 /// Extract notes from a single track using "latest NoteOn wins" monophony.
+#[allow(clippy::too_many_arguments)]
 fn single_track_notes(
     smf: &Smf<'_>,
     track_selection: Option<usize>,
     channel_filter: Option<u8>,
     tempo_map: &[TempoChange],
     ticks_per_beat: u32,
+    include_rests: bool,
+    trim_start: bool,
+    trim_end: bool,
 ) -> Result<Vec<SongNote>, MidiError> {
     let track_idx = match track_selection {
         Some(idx) => idx,
@@ -509,11 +621,21 @@ fn single_track_notes(
     let mut abs_tick: u64 = 0;
     // Currently sounding note: (pitch, start_tick).
     let mut active: Option<(u8, u64)> = None;
+    // Start of the current silence gap (tick); `Some(0)` at the beginning so
+    // that leading silence before the first note is tracked.
+    let mut gap_start: Option<u64> = if include_rests { Some(0) } else { None };
+    // Whether any audible note (pitch 31–127) has started yet.
+    let mut first_audible_started = false;
+    // Track end tick (from EndOfTrack meta or last event tick).
+    let mut track_end_tick: u64 = 0;
 
     for event in selected_track {
         abs_tick += u64::from(event.delta.as_int());
 
         match event.kind {
+            TrackEventKind::Meta(MetaMessage::EndOfTrack) => {
+                track_end_tick = abs_tick;
+            }
             TrackEventKind::Midi {
                 channel,
                 message: MidiMessage::NoteOn { key, vel },
@@ -522,15 +644,37 @@ fn single_track_notes(
                     continue;
                 }
                 if vel.as_int() > 0 {
-                    // New note: cut any active note (monophonic extraction).
+                    // New note: cut any active note (monophonic extraction, no gap).
                     if let Some((pitch, start)) = active.take() {
                         if let Some(note) =
                             make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
                         {
                             notes.push(note);
+                            // In-range note was cut; new note immediately follows —
+                            // no gap is created, so don't open gap_start here.
                         }
+                        // If out-of-range: gap_start remains unchanged (silence continues).
                     }
-                    active = Some((key.as_int(), abs_tick));
+                    let key_u8 = key.as_int();
+                    let in_range = (31u8..=127).contains(&key_u8);
+                    if in_range {
+                        // Audible note starting: emit any pending rest.
+                        if include_rests {
+                            if let Some(gs) = gap_start.take() {
+                                let is_leading = !first_audible_started;
+                                if !(trim_start && is_leading) {
+                                    if let Some(rest) =
+                                        make_rest(gs, abs_tick - gs, tempo_map, ticks_per_beat)
+                                    {
+                                        notes.push(rest);
+                                    }
+                                }
+                            }
+                        }
+                        first_audible_started = true;
+                    }
+                    // Out-of-range NoteOn: treat as silence; don't update gap_start.
+                    active = Some((key_u8, abs_tick));
                 } else {
                     // NoteOn with vel == 0 is equivalent to NoteOff.
                     if let Some((pitch, start)) = active {
@@ -540,7 +684,12 @@ fn single_track_notes(
                                 make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
                             {
                                 notes.push(note);
+                                // Audible note ended: silence starts here.
+                                if include_rests {
+                                    gap_start = Some(abs_tick);
+                                }
                             }
+                            // Out-of-range: gap_start unchanged (silence was already tracked).
                         }
                     }
                 }
@@ -559,7 +708,11 @@ fn single_track_notes(
                             make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat)
                         {
                             notes.push(note);
+                            if include_rests {
+                                gap_start = Some(abs_tick);
+                            }
                         }
+                        // Out-of-range: gap_start unchanged.
                     }
                 }
             }
@@ -571,6 +724,20 @@ fn single_track_notes(
     if let Some((pitch, start)) = active {
         if let Some(note) = make_note(pitch, start, abs_tick - start, tempo_map, ticks_per_beat) {
             notes.push(note);
+            if include_rests {
+                gap_start = Some(abs_tick);
+            }
+        }
+        // Out-of-range dangling note: gap_start unchanged.
+    }
+
+    // Trailing rest (after last audible note, up to EndOfTrack).
+    if include_rests && !trim_end {
+        let effective_end = track_end_tick.max(abs_tick);
+        if let Some(gs) = gap_start {
+            if let Some(rest) = make_rest(gs, effective_end - gs, tempo_map, ticks_per_beat) {
+                notes.push(rest);
+            }
         }
     }
 
@@ -589,6 +756,45 @@ fn make_note(
 ) -> Option<SongNote> {
     let duration = ticks_to_robot_units(start_tick, dur_ticks, tempo_map, ticks_per_beat);
     SongNote::new(pitch, duration).ok()
+}
+
+/// Build a rest [`SongNote`] (pitch = 0) from a silence span.
+///
+/// Returns `None` if `dur_ticks` is zero (explicit check before calling
+/// `ticks_to_robot_units`, which clamps zero to 1).
+fn make_rest(
+    start_tick: u64,
+    dur_ticks: u64,
+    tempo_map: &[TempoChange],
+    ticks_per_beat: u32,
+) -> Option<SongNote> {
+    if dur_ticks == 0 {
+        return None;
+    }
+    let duration = ticks_to_robot_units(start_tick, dur_ticks, tempo_map, ticks_per_beat);
+    Some(SongNote::rest(duration))
+}
+
+/// Find the maximum track end tick across all tracks.
+///
+/// Uses the `EndOfTrack` meta event if present; falls back to the tick of the
+/// last event in the track if there is no explicit `EndOfTrack`.
+fn find_max_track_end_tick(smf: &Smf<'_>) -> u64 {
+    smf.tracks
+        .iter()
+        .map(|track| {
+            let mut abs_tick: u64 = 0;
+            let mut end_tick: u64 = 0;
+            for event in track {
+                abs_tick += u64::from(event.delta.as_int());
+                if let TrackEventKind::Meta(MetaMessage::EndOfTrack) = event.kind {
+                    end_tick = abs_tick;
+                }
+            }
+            end_tick.max(abs_tick)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Split a flat [`Vec<SongNote>`] into chunks of at most [`MAX_SONG_NOTES`]
@@ -1360,5 +1566,214 @@ mod tests {
         let notes = midi_to_notes(&midi, &config).unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].midi_note(), 67); // G4 on ch2
+    }
+
+    // ── Rest / silence support ───────────────────────────────────────────────
+
+    /// Build a track with [C4(0-120) | gap(120-240) | E4(240-360)] at 120 BPM.
+    fn make_rest_gap_track() -> Vec<u8> {
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], // tempo 500_000
+            0x00, 0x90, 0x3C, 0x40, // tick   0: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x78, 0x90, 0x40, 0x40, // tick 240: NoteOn E4
+            0x78, 0x80, 0x40, 0x00, // tick 360: NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00, // EndOfTrack
+        ];
+        smf0(120, track)
+    }
+
+    #[test]
+    fn test_include_rests_false_unchanged() {
+        // Default config: include_rests=false → gaps not emitted.
+        let midi = make_rest_gap_track();
+        let notes = midi_to_notes(&midi, &MidiConfig::default()).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].midi_note(), 60); // C4
+        assert_eq!(notes[1].midi_note(), 64); // E4
+    }
+
+    #[test]
+    fn test_include_rests_basic() {
+        // include_rests=true → gap between C4 and E4 becomes a rest note.
+        let midi = make_rest_gap_track();
+        let config = MidiConfig {
+            include_rests: true,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0].midi_note(), 60); // C4
+        assert!(notes[1].is_rest());
+        assert_eq!(notes[1].duration_64ths(), 32); // 120 ticks = 32 units
+        assert_eq!(notes[2].midi_note(), 64); // E4
+    }
+
+    #[test]
+    fn test_trim_start_suppresses_leading_rest() {
+        // Silence at the start (tick 0-120), then C4 (120-240).
+        // trim_start=true (default) → leading rest not emitted.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x78, 0x90, 0x3C,
+            0x40, // tick 120: NoteOn C4 (delta=120)
+            0x78, 0x80, 0x3C, 0x00, // tick 240: NoteOff C4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            trim_start: true,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        // Only the audible note; leading rest trimmed.
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 60);
+    }
+
+    #[test]
+    fn test_no_trim_start_emits_leading_rest() {
+        // Same track, but trim_start=false → leading rest is emitted.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x78, 0x90, 0x3C,
+            0x40, // tick 120: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 240: NoteOff C4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            trim_start: false,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0].is_rest());
+        assert_eq!(notes[0].duration_64ths(), 32); // 120 ticks leading silence
+        assert_eq!(notes[1].midi_note(), 60);
+    }
+
+    #[test]
+    fn test_trim_end_suppresses_trailing_rest() {
+        // C4 (0-120), then silence to EOT at tick 240.
+        // trim_end=true (default) → trailing rest not emitted.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // tick   0: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x78, 0xFF, 0x2F, 0x00, // tick 240: EndOfTrack
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            trim_end: true,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 60);
+    }
+
+    #[test]
+    fn test_no_trim_end_emits_trailing_rest() {
+        // Same track, trim_end=false → trailing rest is emitted.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // tick   0: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x78, 0xFF, 0x2F, 0x00, // tick 240: EndOfTrack
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            trim_end: false,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].midi_note(), 60);
+        assert!(notes[1].is_rest());
+        assert_eq!(notes[1].duration_64ths(), 32); // 120 ticks trailing silence
+    }
+
+    #[test]
+    fn test_note_at_tick_zero_no_spurious_rest() {
+        // Note starts at tick 0 → gap_start(0) should be suppressed (zero-duration).
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // tick   0: NoteOn C4 (delta=0)
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            trim_start: false, // even without trim, zero-duration rest must not appear
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        // No spurious rest; only the audible note.
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].midi_note(), 60);
+    }
+
+    #[test]
+    fn test_out_of_range_span_treated_as_rest() {
+        // C4 (0-120) | pitch 20 out-of-range (120-240) | C4 (240-360).
+        // Out-of-range span should appear as a rest between the two C4 notes.
+        let tb = tempo_bytes(500_000);
+        let track: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // tick   0: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x00, 0x90, 0x14, 0x40, // tick 120: NoteOn pitch 20 (out-of-range)
+            0x78, 0x80, 0x14, 0x00, // tick 240: NoteOff pitch 20
+            0x00, 0x90, 0x3C, 0x40, // tick 240: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 360: NoteOff C4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf0(120, track);
+        let config = MidiConfig {
+            include_rests: true,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0].midi_note(), 60); // first C4
+        assert!(notes[1].is_rest());
+        assert_eq!(notes[1].duration_64ths(), 32); // 120-tick gap filled by out-of-range span
+        assert_eq!(notes[2].midi_note(), 60); // second C4
+    }
+
+    #[test]
+    fn test_merge_include_rests_basic() {
+        // Merge mode: C4 (0-120) | gap (120-240) | E4 (240-360).
+        let tb = tempo_bytes(500_000);
+        let track0: &[u8] = &[
+            0x00, 0xFF, 0x51, 0x03, tb[0], tb[1], tb[2], 0x00, 0x90, 0x3C,
+            0x40, // tick   0: NoteOn C4
+            0x78, 0x80, 0x3C, 0x00, // tick 120: NoteOff C4
+            0x78, 0x90, 0x40, 0x40, // tick 240: NoteOn E4
+            0x78, 0x80, 0x40, 0x00, // tick 360: NoteOff E4
+            0x00, 0xFF, 0x2F, 0x00,
+        ];
+        let midi = smf1(120, track0, &[0x00, 0xFF, 0x2F, 0x00]);
+        let config = MidiConfig {
+            merge_all_tracks: true,
+            include_rests: true,
+            ..MidiConfig::default()
+        };
+        let notes = midi_to_notes(&midi, &config).unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0].midi_note(), 60); // C4
+        assert!(notes[1].is_rest());
+        assert_eq!(notes[1].duration_64ths(), 32);
+        assert_eq!(notes[2].midi_note(), 64); // E4
     }
 }
