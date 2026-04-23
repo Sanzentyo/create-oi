@@ -1934,3 +1934,143 @@ fn send_cmd_drive_calls_flush() {
         "drive (send_cmd) must call flush()"
     );
 }
+
+// --- Round 39 stream lifecycle tests ---
+
+/// start_stream while already streaming must return ValidationError.
+#[test]
+fn start_stream_rejects_when_already_streaming() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    create.start_stream(&[8]).unwrap();
+    let result = create.start_stream(&[22]);
+    assert!(
+        result.is_err(),
+        "start_stream should return Err when already streaming"
+    );
+    let create_oi::error::Error::Validation(ve) = result.unwrap_err() else {
+        panic!("expected ValidationError");
+    };
+    assert_eq!(ve.field, "stream");
+    assert!(
+        ve.reason.contains("already active"),
+        "expected 'already active' in reason, got: {}",
+        ve.reason
+    );
+}
+
+/// toggle_stream(false) must clear streaming flag so sensor queries work again.
+#[test]
+fn toggle_stream_false_clears_streaming_flag() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    create.start_stream(&[8]).unwrap();
+    create.toggle_stream(false).unwrap();
+    // After pausing, sensor queries should not return ValidationError.
+    // (Mock has no read bytes; we accept Protocol::InsufficientData but not Validation.)
+    let result = create.query_sensor_raw(8);
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should not return ValidationError after toggle_stream(false)"
+    );
+}
+
+/// pause_stream() is a convenience wrapper for toggle_stream(false).
+#[test]
+fn pause_stream_clears_streaming_flag() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    create.start_stream(&[8]).unwrap();
+    create.pause_stream().unwrap();
+    let result = create.query_sensor_raw(8);
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should not return ValidationError after pause_stream()"
+    );
+}
+
+/// resume_stream() sets streaming=true, blocking sensor queries again.
+#[test]
+fn resume_stream_sets_streaming_flag() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    create.start_stream(&[8]).unwrap();
+    create.pause_stream().unwrap();
+    create.resume_stream().unwrap();
+    // Now streaming again — query_sensor_raw must return ValidationError.
+    let result = create.query_sensor_raw(8);
+    assert!(
+        matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should return ValidationError while streaming after resume_stream()"
+    );
+}
+
+/// A failed start_stream (unknown packet ID) must not change the streaming state.
+#[test]
+fn failed_start_stream_does_not_change_state() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    // 99 is not a valid packet ID.
+    let result = create.start_stream(&[99]);
+    assert!(result.is_err(), "should reject unknown packet ID");
+    // streaming should still be false; sensor query should not return ValidationError.
+    let result = create.query_sensor_raw(8);
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "streaming state must remain false after a failed start_stream"
+    );
+}
+
+/// Canonical error messages for Roomba 400 sensor packet validation (sync path).
+#[test]
+fn validate_packet_id_canonical_messages() {
+    use create_oi::error::Error;
+
+    // Group packet 4 is not supported on Roomba 400 — validate via query_sensor_raw_into.
+    {
+        let mock = MockTransport::new();
+        let mut create = Create::new(mock, RobotModel::Roomba400).start().unwrap();
+        let mut buf = [0u8; 64];
+        let result = create.query_sensor_raw_into(4, &mut buf);
+        if let Err(Error::Validation(ve)) = result {
+            assert_eq!(
+                ve.reason, "sensor group packet is not supported by this robot model",
+                "canonical group-packet error message mismatch"
+            );
+        }
+    }
+
+    // Individual packet (8) is not supported on Roomba 400 — validate via query_sensor_raw.
+    {
+        let mock = MockTransport::new();
+        let mut create = Create::new(mock, RobotModel::Roomba400).start().unwrap();
+        let result = create.query_sensor_raw(8);
+        if let Err(Error::Validation(ve)) = result {
+            assert_eq!(
+                ve.reason,
+                "individual sensor packet IDs are not supported on Roomba 400; use group IDs 0\u{2013}3",
+                "canonical individual-packet error message mismatch"
+            );
+        }
+    }
+}

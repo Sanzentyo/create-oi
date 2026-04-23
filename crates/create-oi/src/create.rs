@@ -432,6 +432,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Start streaming the given packet IDs.
     ///
     /// Returns an error if this robot model does not support sensor streaming,
+    /// if a stream is already active (call [`toggle_stream(false)`](Self::toggle_stream) first),
     /// if the packet ID list exceeds the protocol limit, if the total stream
     /// payload per cycle would exceed 255 bytes, if the list contains
     /// duplicate packet IDs, or if a packet ID is not available on this model.
@@ -441,12 +442,19 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// Sets the internal streaming flag; while streaming, sensor query methods
     /// (`query_sensor_raw`, `query_sensor_raw_into`, `query_list`) return
-    /// `ValidationError`. Call `toggle_stream(false)` to pause the stream first.
+    /// `ValidationError`. Call [`toggle_stream(false)`](Self::toggle_stream) or
+    /// [`pause_stream`](Self::pause_stream) to pause the stream first.
     pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
                 field: "stream",
                 reason: "sensor streaming is not supported by this robot model",
+            }));
+        }
+        if self.streaming {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "a stream is already active; call toggle_stream(false) before starting a new stream",
             }));
         }
         if sensor::has_duplicate_ids(packet_ids) {
@@ -481,6 +489,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         }
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd)?;
+        self.stream_parser.reset();
         self.streaming = true;
         Ok(())
     }
@@ -489,6 +498,8 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// Returns an error if this robot model does not support sensor streaming.
     /// Updates the internal streaming flag (`enable = false` allows sensor queries again).
+    /// When pausing (`enable = false`), the stream parser state is cleared so that
+    /// subsequent [`start_stream`](Self::start_stream) calls start from a clean state.
     #[must_use = "result must be checked"]
     pub fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
@@ -498,8 +509,30 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             }));
         }
         self.send_cmd(&command::encode_toggle_stream(enable))?;
+        if !enable {
+            self.stream_parser.reset();
+        }
         self.streaming = enable;
         Ok(())
+    }
+
+    /// Pause the sensor stream.
+    ///
+    /// Equivalent to `toggle_stream(false)`. Clears the stream parser state.
+    /// Call [`resume_stream`](Self::resume_stream) to resume, or
+    /// [`start_stream`](Self::start_stream) with a new packet list to restart.
+    #[must_use = "result must be checked"]
+    pub fn pause_stream(&mut self) -> Result<(), Error<std::io::Error>> {
+        self.toggle_stream(false)
+    }
+
+    /// Resume a paused sensor stream.
+    ///
+    /// Equivalent to `toggle_stream(true)`. The robot resumes sending the same
+    /// packet IDs that were active before the stream was paused.
+    #[must_use = "result must be checked"]
+    pub fn resume_stream(&mut self) -> Result<(), Error<std::io::Error>> {
+        self.toggle_stream(true)
     }
 
     /// Read bytes from the transport and try to parse stream frames.
@@ -1148,7 +1181,7 @@ impl<M: Mode, T: Transport> Create<M, T> {
             if !self.model.supports_group_packet(packet_id) {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
-                    reason: "sensor group packet not supported by this robot model",
+                    reason: "sensor group packet is not supported by this robot model",
                 }));
             }
         } else if create_oi_protocol::opcode::packet_info(packet_id).is_some() {

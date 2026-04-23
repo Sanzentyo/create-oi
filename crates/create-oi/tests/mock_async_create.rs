@@ -1691,3 +1691,114 @@ async fn async_send_cmd_drive_calls_flush() {
         "async drive (send_cmd) must call flush()"
     );
 }
+
+// --- Round 39 async stream lifecycle tests ---
+
+/// start_stream while already streaming must return ValidationError (async).
+#[tokio::test]
+async fn async_start_stream_rejects_when_already_streaming() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    create.start_stream(&[8]).await.unwrap();
+    let result = create.start_stream(&[22]).await;
+    assert!(
+        result.is_err(),
+        "start_stream should return Err when already streaming"
+    );
+    let create_oi::error::Error::Validation(ve) = result.unwrap_err() else {
+        panic!("expected ValidationError");
+    };
+    assert_eq!(ve.field, "stream");
+    assert!(
+        ve.reason.contains("already active"),
+        "expected 'already active' in reason, got: {}",
+        ve.reason
+    );
+}
+
+/// toggle_stream(false) must clear streaming flag so sensor queries work again (async).
+#[tokio::test]
+async fn async_toggle_stream_false_clears_streaming_flag() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    create.start_stream(&[8]).await.unwrap();
+    create.toggle_stream(false).await.unwrap();
+    let result = create.query_sensor_raw(8).await;
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should not return ValidationError after toggle_stream(false)"
+    );
+}
+
+/// pause_stream() is a convenience wrapper for toggle_stream(false) (async).
+#[tokio::test]
+async fn async_pause_stream_clears_streaming_flag() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    create.start_stream(&[8]).await.unwrap();
+    create.pause_stream().await.unwrap();
+    let result = create.query_sensor_raw(8).await;
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should not return ValidationError after pause_stream()"
+    );
+}
+
+/// resume_stream() sets streaming=true, blocking sensor queries again (async).
+#[tokio::test]
+async fn async_resume_stream_sets_streaming_flag() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    create.start_stream(&[8]).await.unwrap();
+    create.pause_stream().await.unwrap();
+    create.resume_stream().await.unwrap();
+    let result = create.query_sensor_raw(8).await;
+    assert!(
+        matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "query_sensor_raw should return ValidationError while streaming after resume_stream()"
+    );
+}
+
+/// A failed start_stream must not change the streaming state (async).
+#[tokio::test]
+async fn async_failed_start_stream_does_not_change_state() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    let result = create.start_stream(&[99]).await;
+    assert!(result.is_err(), "should reject unknown packet ID");
+    let result = create.query_sensor_raw(8).await;
+    assert!(
+        !matches!(result, Err(create_oi::error::Error::Validation(_))),
+        "streaming state must remain false after a failed start_stream"
+    );
+}

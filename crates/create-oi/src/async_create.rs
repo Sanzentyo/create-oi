@@ -487,6 +487,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         self.validate_stream_init_params(packet_ids)?;
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd).await?;
+        self.stream_parser.reset();
         self.streaming = true;
         Ok(())
     }
@@ -509,6 +510,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         let mut buf = [0u8; MAX_CMD];
         let len = command::encode_stream_into(&mut buf, packet_ids)?;
         self.send_cmd(&buf[..len]).await?;
+        self.stream_parser.reset();
         self.streaming = true;
         Ok(())
     }
@@ -516,6 +518,9 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Pause or resume the sensor stream.
     ///
     /// Returns an error if this robot model does not support sensor streaming.
+    /// Updates the internal streaming flag (`enable = false` allows sensor queries again).
+    /// When pausing (`enable = false`), the stream parser state is cleared so that
+    /// subsequent [`start_stream`](Self::start_stream) calls start from a clean state.
     #[must_use = "result must be checked"]
     pub async fn toggle_stream(&mut self, enable: bool) -> Result<(), Error<T::Error>> {
         if !self.model.supports_stream() {
@@ -526,8 +531,30 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         }
         self.send_cmd(&command::encode_toggle_stream(enable))
             .await?;
+        if !enable {
+            self.stream_parser.reset();
+        }
         self.streaming = enable;
         Ok(())
+    }
+
+    /// Pause the sensor stream.
+    ///
+    /// Equivalent to `toggle_stream(false)`. Clears the stream parser state.
+    /// Call [`resume_stream`](Self::resume_stream) to resume, or
+    /// [`start_stream`](Self::start_stream) with a new packet list to restart.
+    #[must_use = "result must be checked"]
+    pub async fn pause_stream(&mut self) -> Result<(), Error<T::Error>> {
+        self.toggle_stream(false).await
+    }
+
+    /// Resume a paused sensor stream.
+    ///
+    /// Equivalent to `toggle_stream(true)`. The robot resumes sending the same
+    /// packet IDs that were active before the stream was paused.
+    #[must_use = "result must be checked"]
+    pub async fn resume_stream(&mut self) -> Result<(), Error<T::Error>> {
+        self.toggle_stream(true).await
     }
 
     /// Read bytes from the transport and try to parse stream frames.
@@ -1138,6 +1165,12 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
                 reason: "sensor streaming is not supported by this robot model",
             }));
         }
+        if self.streaming {
+            return Err(Error::Validation(ValidationError {
+                field: "stream",
+                reason: "a stream is already active; call toggle_stream(false) before starting a new stream",
+            }));
+        }
         if sensor::has_duplicate_ids(packet_ids) {
             return Err(Error::Validation(ValidationError {
                 field: "packet_ids",
@@ -1228,7 +1261,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
             if !self.model.supports_individual_sensor_packets() {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
-                    reason: "individual sensor packets are not supported by Roomba 400; use group IDs 0–3",
+                    reason: "individual sensor packet IDs are not supported on Roomba 400; use group IDs 0–3",
                 }));
             }
             if packet_id > self.model.max_individual_sensor_packet_id() {
