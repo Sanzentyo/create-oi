@@ -4,6 +4,11 @@ A **pure Rust** implementation of the iRobot Create / Roomba
 [Open Interface (OI)](https://www.irobot.com/about-irobot/stem/create-2)
 protocol.
 
+https://github.com/user-attachments/assets/b99182d7-f779-4ccd-b6da-48198b19564b
+
+The MIDI file featured in this video was sourced from MidiShow:
+https://www.midishow.com/en/midi/211734.html
+
 ## Features
 
 - **Sans-IO** — Protocol encoding/decoding on plain `&[u8]`, no I/O dependency
