@@ -1406,3 +1406,70 @@ Added to all three `play_midi` examples (serial, smol, tokio):
   `SensorData { x: ..., y: ..., ..Default::default() }` struct literals
 
 **Verification:** 380 tests pass, clippy clean
+
+---
+
+## Round 36: Chunk-switching latency fix — flush-free sensor queries + SmolTransport split
+
+**Goal:** Eliminate audible gaps between MIDI chunks during playback. User reported
+large switching latency across all three transports (smol, serial, tokio).
+
+### Root cause analysis
+
+Rubber duck identified two independent latency sources:
+
+1. **smol-specific (100 ms):** `Unblock<NativePort>` is a single state machine.
+   After `read()`, a background read task remains running inside `NativePort::read()`
+   with a 100 ms OS timeout. The next `write_all()` calls `poll_stop()`, which must
+   wait for that read task to time out. `write_all` retry loop helped correctness but
+   added a worst-case 100 ms delay per write following a read.
+
+2. **Cross-transport (`tcdrain` latency):** `send_cmd()` calls `flush()` after every
+   write, which invokes `tcdrain()` on all three transports. On macOS with USB serial
+   adapters, `tcdrain` can take 1–16 ms per call. For the hot `query_sensor` polling
+   loop (query → read), there are 3 `tcdrain` calls per chunk transition.
+
+### Fix 1: Skip `flush()` for sensor query commands (all transports)
+
+`query_sensor_raw_into()`, `query_sensor_raw()`, and `query_list()` in both
+`async_create.rs` and `create.rs` now use the new private `write_bytes()` helper
+instead of `send_cmd()`. `write_bytes()` is identical to `send_cmd()` except it does
+not call `flush()`.
+
+**Rationale:** For request–response commands, the OS kernel transmits the small write
+(2 bytes for SENSORS, variable for QUERY_LIST) from its TX buffer immediately — no
+`tcdrain` is needed. `flush()` is still required for fire-and-forget commands (e.g.
+`play_song`, `define_song`) and the baud-change sequence.
+
+**Impact:** Removes `tcdrain` from the sensor query hot path on all three transports.
+
+### Fix 2: Split SmolTransport into reader + writer halves
+
+`SmolTransport` now holds two `Unblock<NativePort>` instances:
+```rust
+pub struct SmolTransport {
+    writer: Unblock<NativePort>,
+    reader: Unblock<NativePort>,
+}
+```
+
+`open_with_baud()` calls `port.try_clone_native()` (which uses `dup()`/
+`F_DUPFD_CLOEXEC` on Unix, `DuplicateHandle` on Windows) to obtain a second fd for
+the reader. The writer is used exclusively for `write_all()` and `flush()`, the reader
+for `read()`. Since writes and reads no longer share the same `Unblock` state machine,
+the `poll_stop(State::Reading)` path that caused the 100 ms write delay is completely
+eliminated.
+
+The `write_all` retry loop has been removed. `flush()` retains its `TimedOut`
+suppression for macOS `tcdrain` failures.
+
+**`set_baud()` safety:** `set_baud()` now quiesces both halves before reconfiguring:
+```rust
+let _ = self.reader.get_mut().await; // stop any lingering read task
+let port = self.writer.get_mut().await;
+port.set_baud_rate(rate.baud_u32()).map_err(io::Error::other)
+```
+TTY baud settings are per-device (`tcsetattr` affects all fds), so calling
+`set_baud_rate()` on the writer fd is sufficient.
+
+**Verification:** All tests pass, clippy clean

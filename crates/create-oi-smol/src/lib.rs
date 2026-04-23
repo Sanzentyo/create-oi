@@ -34,9 +34,16 @@ pub use create_oi;
 ///
 /// Wraps a native serial port in [`smol::Unblock`], which runs
 /// blocking serial I/O on a thread pool without blocking the async executor.
+///
+/// The port is split into separate reader and writer [`Unblock`] halves using
+/// `try_clone_native()` (a `dup()`/`DuplicateHandle` on the underlying fd).
+/// This allows writes to proceed immediately without waiting for a lingering
+/// background read task to time out, eliminating up to 100 ms of latency on
+/// every write that follows a read.
 #[derive(Debug)]
 pub struct SmolTransport {
-    port: Unblock<NativePort>,
+    writer: Unblock<NativePort>,
+    reader: Unblock<NativePort>,
 }
 
 impl SmolTransport {
@@ -60,8 +67,10 @@ impl SmolTransport {
             .timeout(Duration::from_millis(100))
             .open_native()
             .map_err(io::Error::other)?;
+        let reader_port = port.try_clone_native().map_err(io::Error::other)?;
         Ok(Self {
-            port: Unblock::new(port),
+            writer: Unblock::new(port),
+            reader: Unblock::new(reader_port),
         })
     }
 }
@@ -70,22 +79,7 @@ impl AsyncTransport for SmolTransport {
     type Error = io::Error;
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        // Before starting a new write, Unblock must stop any lingering read task.
-        // That task is blocked in NativePort::read() with a 100 ms OS timeout;
-        // when poll_stop drops the reader-side pipe, the task eventually times out
-        // and returns Err(TimedOut), which propagates through write_all().
-        // State is already reset to Idle at that point (no bytes were written),
-        // so retrying the whole write is safe and correct.
-        loop {
-            match self.port.write_all(data).await {
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) => {}
-                result => return result,
-            }
-        }
+        self.writer.write_all(data).await
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
@@ -94,7 +88,7 @@ impl AsyncTransport for SmolTransport {
         // events and must not surface as errors to callers: retry silently until
         // real data (or a genuine error) arrives.
         loop {
-            match self.port.read(buf).await {
+            match self.reader.read(buf).await {
                 Err(e)
                     if matches!(
                         e.kind(),
@@ -112,7 +106,7 @@ impl AsyncTransport for SmolTransport {
         // crate maps repeated `EINTR` retries in `tcdrain` to `TimedOut`).  The bytes
         // are already in the kernel TX buffer at this point, so treat `TimedOut` as
         // success rather than propagating a misleading error that aborts playback.
-        match self.port.flush().await {
+        match self.writer.flush().await {
             Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(()),
             other => other,
         }
@@ -126,8 +120,12 @@ impl AsyncTransport for SmolTransport {
 impl AsyncBaudConfigurable for SmolTransport {
     async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
         use serialport::SerialPort;
-        // get_mut() waits until in-flight thread-pool operations complete and returns &mut NativePort.
-        let port = self.port.get_mut().await;
+        // TTY settings (baud rate) are per-device: tcsetattr on either fd
+        // affects the device and is visible through both fds.
+        // Quiesce the reader first to stop any lingering background read task,
+        // then get exclusive access to the writer fd to reconfigure baud rate.
+        let _ = self.reader.get_mut().await;
+        let port = self.writer.get_mut().await;
         port.set_baud_rate(rate.baud_u32())
             .map_err(io::Error::other)
     }

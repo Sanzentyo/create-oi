@@ -326,7 +326,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
             ))?;
         let mut buf = vec![0u8; len];
-        self.send_cmd(&command::encode_sensors(packet_id))?;
+        self.write_bytes(&command::encode_sensors(packet_id))?;
         self.read_exact(&mut buf)?;
         Ok(buf)
     }
@@ -358,7 +358,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                 },
             ));
         }
-        self.send_cmd(&command::encode_sensors(packet_id))?;
+        self.write_bytes(&command::encode_sensors(packet_id))?;
         self.read_exact(&mut buf[..len])?;
         Ok(len)
     }
@@ -410,7 +410,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         }
         let expected_len = sensor::expected_data_len(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
-        self.send_cmd(&cmd)?;
+        self.write_bytes(&cmd)?;
 
         let mut buf = vec![0u8; expected_len];
         self.read_exact(&mut buf)?;
@@ -1093,11 +1093,23 @@ impl<M: Mode, T: Transport> Create<M, T> {
     /// # Warning
     ///
     /// Direct transport access bypasses the TypeState mode invariants, the
-    /// Send raw bytes to the robot.
+    /// Send raw bytes to the robot and flush.
+    ///
+    /// Use this for fire-and-forget commands.  Flushing ensures bytes are
+    /// transmitted before any delay or baud-rate change that follows.
     fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<std::io::Error>> {
         self.transport.write_all(data).map_err(Error::Io)?;
         self.transport.flush().map_err(Error::Io)?;
         Ok(())
+    }
+
+    /// Write raw bytes to the robot without flushing.
+    ///
+    /// Use this for request–response commands where a `read_exact` immediately
+    /// follows.  The kernel transmits the bytes without `tcdrain`, so the
+    /// flush step adds latency without benefit.
+    fn write_bytes(&mut self, data: &[u8]) -> Result<(), Error<std::io::Error>> {
+        self.transport.write_all(data).map_err(Error::Io)
     }
 
     /// Read exactly `buf.len()` bytes from the transport.

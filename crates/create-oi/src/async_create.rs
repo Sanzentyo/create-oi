@@ -357,7 +357,8 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 },
             ));
         }
-        self.send_cmd(&command::encode_sensors(packet_id)).await?;
+        self.write_bytes(&command::encode_sensors(packet_id))
+            .await?;
         self.read_exact(&mut buf[..len]).await?;
         Ok(len)
     }
@@ -377,7 +378,8 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
                 create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
             ))?;
         let mut buf = vec![0u8; len];
-        self.send_cmd(&command::encode_sensors(packet_id)).await?;
+        self.write_bytes(&command::encode_sensors(packet_id))
+            .await?;
         self.read_exact(&mut buf).await?;
         Ok(buf)
     }
@@ -420,7 +422,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
         let expected_len = self.validate_query_list_common(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
-        self.send_cmd(&cmd).await?;
+        self.write_bytes(&cmd).await?;
 
         let mut buf = vec![0u8; expected_len];
         self.read_exact(&mut buf).await?;
@@ -448,7 +450,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
         let mut cmd_buf = [0u8; MAX_CMD];
         let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
-        self.send_cmd(&cmd_buf[..cmd_len]).await?;
+        self.write_bytes(&cmd_buf[..cmd_len]).await?;
 
         let mut buf = [0u8; 256];
         self.read_exact(&mut buf[..expected_len]).await?;
@@ -1241,11 +1243,24 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
         Ok(())
     }
 
-    /// Send raw bytes to the robot.
+    /// Send raw bytes to the robot and flush.
+    ///
+    /// Use this for fire-and-forget commands where the robot does not respond.
+    /// Flushing (`tcdrain`) ensures bytes are transmitted before any delay or
+    /// baud-rate change that follows.
     async fn send_cmd(&mut self, data: &[u8]) -> Result<(), Error<T::Error>> {
         self.transport.write_all(data).await.map_err(Error::Io)?;
         self.transport.flush().await.map_err(Error::Io)?;
         Ok(())
+    }
+
+    /// Write raw bytes to the robot without flushing.
+    ///
+    /// Use this for request–response commands where a `read_exact` immediately
+    /// follows.  The OS kernel transmits the bytes from its TX buffer without
+    /// waiting for `tcdrain`, so the flush step adds latency without benefit.
+    async fn write_bytes(&mut self, data: &[u8]) -> Result<(), Error<T::Error>> {
+        self.transport.write_all(data).await.map_err(Error::Io)
     }
 
     /// Read exactly `buf.len()` bytes from the transport.
