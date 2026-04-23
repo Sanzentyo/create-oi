@@ -24,6 +24,14 @@ All notable changes to the `create-oi` workspace are documented here.
 - Validated newtypes: `Velocity`, `Radius`, `MotorPower`, `SongNote`, etc.
 - `midi` feature: MIDI-to-OI song playback (Standard MIDI File → OI song commands)
 - `no_std` support via feature flags (`std` / `alloc` / bare)
+- **`Error::Disconnected`**: zero-byte transport reads now return a dedicated
+  `Disconnected` variant instead of `Protocol(InsufficientData)`.  Applies to all
+  six read sites in both sync and async paths.
+- `Error<E>` and `MidiError` are `#[non_exhaustive]`; future variants will not
+  require a major version bump.
+- `Transport::write_all` / `AsyncTransport::write_all` contract clarified:
+  implementations must submit bytes into the transmit path without requiring a
+  subsequent `flush()` call for basic request–response correctness.
 
 ### create-oi-serial
 
@@ -45,3 +53,7 @@ All notable changes to the `create-oi` workspace are documented here.
 
 - `SmolTransport`: async transport backed by `smol::Unblock<NativePort>`
 - Cross-platform (Linux, macOS, Windows) via platform-specific `NativePort` type alias
+- Reader and writer split into separate `Unblock<NativePort>` halves via `dup(2)` to
+  eliminate sensor-query latency during concurrent streaming/MIDI playback.
+- Fixed `TimedOut` panic on overlapping write when a background read task was in
+  flight.

@@ -77,10 +77,12 @@ const TICKS_PER_REV_CREATE2: f32 = 508.8;
 /// Post-mode-change delay inserted after START, SAFE, FULL, and similar
 /// transitions, in milliseconds.
 ///
-/// The OI spec does not mandate a specific inter-command delay for mode
-/// transitions (unlike the 100 ms baud-rate delay, which is explicit in the
-/// spec). 20 ms is an empirically reliable value observed across Create 2
-/// hardware variants.
+/// The iRobot Create 2 OI spec mandates a 100 ms delay only after the
+/// **Baud** command (opcode 129). For mode-change commands (Safe, Full,
+/// START/Passive transitions) no specific delay is stated in the Create 2
+/// spec. The legacy Roomba SCI specification (V1/V2) explicitly allowed
+/// 20 ms between mode-change commands, so this value is both historically
+/// documented and empirically reliable across hardware variants.
 const MODE_CHANGE_DELAY_MS: u64 = 20;
 
 // ---------------------------------------------------------------------------
