@@ -463,10 +463,184 @@ impl SensorData {
     /// The name "stasis_detected" is misleading — this function returns `true`
     /// when the robot IS moving, not when it is stationary. Use
     /// [`is_making_forward_progress`](Self::is_making_forward_progress) instead.
-    #[deprecated(since = "0.5.0", note = "use `is_making_forward_progress` instead")]
+    #[deprecated(since = "0.4.0", note = "use `is_making_forward_progress` instead")]
     #[inline(always)]
     pub const fn is_stasis_detected(&self) -> Option<bool> {
         self.is_making_forward_progress()
+    }
+
+    // -----------------------------------------------------------------------
+    // Cargo bay digital inputs (packet 32)
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if cargo bay digital input 0 (pin 18) is active (high).
+    #[inline(always)]
+    pub const fn is_cargo_bay_di0(&self) -> Option<bool> {
+        match self.cargo_bay_digital_inputs {
+            Some(b) => Some(b & 0x01 != 0),
+            None => None,
+        }
+    }
+
+    /// Returns `true` if cargo bay digital input 1 is active (high).
+    #[inline(always)]
+    pub const fn is_cargo_bay_di1(&self) -> Option<bool> {
+        match self.cargo_bay_digital_inputs {
+            Some(b) => Some(b & 0x02 != 0),
+            None => None,
+        }
+    }
+
+    /// Returns `true` if cargo bay digital input 2 is active (high).
+    #[inline(always)]
+    pub const fn is_cargo_bay_di2(&self) -> Option<bool> {
+        match self.cargo_bay_digital_inputs {
+            Some(b) => Some(b & 0x04 != 0),
+            None => None,
+        }
+    }
+
+    /// Returns `true` if cargo bay digital input 3 is active (high).
+    #[inline(always)]
+    pub const fn is_cargo_bay_di3(&self) -> Option<bool> {
+        match self.cargo_bay_digital_inputs {
+            Some(b) => Some(b & 0x08 != 0),
+            None => None,
+        }
+    }
+
+    /// Returns `true` if the home base dock is electrically connected via the
+    /// cargo bay Device Detect pin (bit 4, Create 2 / V3 only).
+    #[inline(always)]
+    pub const fn is_home_base_connected(&self) -> Option<bool> {
+        match self.cargo_bay_digital_inputs {
+            Some(b) => Some(b & 0x10 != 0),
+            None => None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Battery utilities
+    // -----------------------------------------------------------------------
+
+    /// Returns the battery state of charge as a percentage in `0.0..=100.0`.
+    ///
+    /// Returns `None` if either [`battery_charge`] or [`battery_capacity`] is
+    /// not available, or if the reported capacity is zero (undefined denominator).
+    ///
+    /// The raw ratio `charge / capacity` is returned without clamping.
+    /// Some robot firmware versions occasionally report `battery_charge` slightly
+    /// above `battery_capacity`, which can produce a value above 100.0.
+    pub fn battery_charge_percent(&self) -> Option<f32> {
+        let charge = self.battery_charge?;
+        let capacity = self.battery_capacity?;
+        if capacity == 0 {
+            return None;
+        }
+        Some(charge as f32 / capacity as f32 * 100.0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Merge / accumulation
+    // -----------------------------------------------------------------------
+
+    /// Update this `SensorData` with any fields that are `Some` in `other`.
+    ///
+    /// Fields where `other` has `None` are left unchanged. Fields where `other`
+    /// has `Some` overwrite the existing value regardless of whether `self`
+    /// already had a value.
+    ///
+    /// This is useful for building a **latest-known snapshot** from a stream
+    /// of partial `SensorData` packets, where each packet only populates the
+    /// sensor IDs that were registered with `start_stream`.
+    ///
+    /// # Note on delta fields
+    ///
+    /// [`distance_delta_mm`](Self::distance_delta_mm) and
+    /// [`angle_delta_deg`](Self::angle_delta_deg) are **delta accumulators** —
+    /// the robot resets their internal counter after each read. This method
+    /// overwrites those fields rather than summing them. If you need cumulative
+    /// odometry, sum the deltas yourself from each individual packet rather
+    /// than relying on a merged snapshot.
+    pub fn merge_from(&mut self, other: &SensorData) {
+        self.bumps_and_wheeldrops = other.bumps_and_wheeldrops.or(self.bumps_and_wheeldrops);
+        self.wall = other.wall.or(self.wall);
+        self.cliff_left = other.cliff_left.or(self.cliff_left);
+        self.cliff_front_left = other.cliff_front_left.or(self.cliff_front_left);
+        self.cliff_front_right = other.cliff_front_right.or(self.cliff_front_right);
+        self.cliff_right = other.cliff_right.or(self.cliff_right);
+        self.virtual_wall = other.virtual_wall.or(self.virtual_wall);
+        self.overcurrents = other.overcurrents.or(self.overcurrents);
+        self.dirt_detect_left = other.dirt_detect_left.or(self.dirt_detect_left);
+        self.dirt_detect_right = other.dirt_detect_right.or(self.dirt_detect_right);
+        self.ir_omni = other.ir_omni.or(self.ir_omni);
+        self.buttons = other.buttons.or(self.buttons);
+        self.distance_delta_mm = other.distance_delta_mm.or(self.distance_delta_mm);
+        self.angle_delta_deg = other.angle_delta_deg.or(self.angle_delta_deg);
+        self.charging_state = other.charging_state.or(self.charging_state);
+        self.voltage = other.voltage.or(self.voltage);
+        self.current = other.current.or(self.current);
+        self.temperature = other.temperature.or(self.temperature);
+        self.battery_charge = other.battery_charge.or(self.battery_charge);
+        self.battery_capacity = other.battery_capacity.or(self.battery_capacity);
+        self.wall_signal = other.wall_signal.or(self.wall_signal);
+        self.cliff_left_signal = other.cliff_left_signal.or(self.cliff_left_signal);
+        self.cliff_front_left_signal = other
+            .cliff_front_left_signal
+            .or(self.cliff_front_left_signal);
+        self.cliff_front_right_signal = other
+            .cliff_front_right_signal
+            .or(self.cliff_front_right_signal);
+        self.cliff_right_signal = other.cliff_right_signal.or(self.cliff_right_signal);
+        self.cargo_bay_digital_inputs = other
+            .cargo_bay_digital_inputs
+            .or(self.cargo_bay_digital_inputs);
+        self.cargo_bay_analog_signal = other
+            .cargo_bay_analog_signal
+            .or(self.cargo_bay_analog_signal);
+        self.charging_sources = other.charging_sources.or(self.charging_sources);
+        self.oi_mode = other.oi_mode.or(self.oi_mode);
+        self.song_number = other.song_number.or(self.song_number);
+        self.song_playing = other.song_playing.or(self.song_playing);
+        self.num_stream_packets = other.num_stream_packets.or(self.num_stream_packets);
+        self.requested_velocity = other.requested_velocity.or(self.requested_velocity);
+        self.requested_radius = other.requested_radius.or(self.requested_radius);
+        self.requested_right_velocity = other
+            .requested_right_velocity
+            .or(self.requested_right_velocity);
+        self.requested_left_velocity = other
+            .requested_left_velocity
+            .or(self.requested_left_velocity);
+        self.left_encoder_counts = other.left_encoder_counts.or(self.left_encoder_counts);
+        self.right_encoder_counts = other.right_encoder_counts.or(self.right_encoder_counts);
+        self.light_bumper = other.light_bumper.or(self.light_bumper);
+        self.light_bump_left_signal = other.light_bump_left_signal.or(self.light_bump_left_signal);
+        self.light_bump_front_left_signal = other
+            .light_bump_front_left_signal
+            .or(self.light_bump_front_left_signal);
+        self.light_bump_center_left_signal = other
+            .light_bump_center_left_signal
+            .or(self.light_bump_center_left_signal);
+        self.light_bump_center_right_signal = other
+            .light_bump_center_right_signal
+            .or(self.light_bump_center_right_signal);
+        self.light_bump_front_right_signal = other
+            .light_bump_front_right_signal
+            .or(self.light_bump_front_right_signal);
+        self.light_bump_right_signal = other
+            .light_bump_right_signal
+            .or(self.light_bump_right_signal);
+        self.ir_left = other.ir_left.or(self.ir_left);
+        self.ir_right = other.ir_right.or(self.ir_right);
+        self.left_motor_current = other.left_motor_current.or(self.left_motor_current);
+        self.right_motor_current = other.right_motor_current.or(self.right_motor_current);
+        self.main_brush_motor_current = other
+            .main_brush_motor_current
+            .or(self.main_brush_motor_current);
+        self.side_brush_motor_current = other
+            .side_brush_motor_current
+            .or(self.side_brush_motor_current);
+        self.stasis = other.stasis.or(self.stasis);
     }
 
     fn store_value(&mut self, id: u8, data: &[u8]) -> Result<(), ProtocolError> {
@@ -791,5 +965,112 @@ mod tests {
     fn expected_data_len_unknown_id_fails() {
         let result = expected_data_len(&[200]);
         assert!(result.is_err(), "unknown ID 200 should return Err");
+    }
+
+    // Round 34: battery_charge_percent
+    #[test]
+    fn battery_charge_percent_normal() {
+        let mut sd = SensorData::default();
+        sd.battery_charge = Some(2000);
+        sd.battery_capacity = Some(4000);
+        let pct = sd.battery_charge_percent().unwrap();
+        assert!((pct - 50.0_f32).abs() < 0.01, "expected 50.0, got {pct}");
+    }
+
+    #[test]
+    fn battery_charge_percent_full() {
+        let mut sd = SensorData::default();
+        sd.battery_charge = Some(4000);
+        sd.battery_capacity = Some(4000);
+        let pct = sd.battery_charge_percent().unwrap();
+        assert!((pct - 100.0_f32).abs() < 0.01, "expected 100.0, got {pct}");
+    }
+
+    #[test]
+    fn battery_charge_percent_over_capacity() {
+        // Some firmware reports charge slightly above capacity; no clamping.
+        let mut sd = SensorData::default();
+        sd.battery_charge = Some(4050);
+        sd.battery_capacity = Some(4000);
+        let pct = sd.battery_charge_percent().unwrap();
+        assert!(pct > 100.0, "should not clamp above 100%");
+    }
+
+    #[test]
+    fn battery_charge_percent_zero_capacity() {
+        let mut sd = SensorData::default();
+        sd.battery_charge = Some(0);
+        sd.battery_capacity = Some(0);
+        assert!(
+            sd.battery_charge_percent().is_none(),
+            "zero capacity must return None"
+        );
+    }
+
+    #[test]
+    fn battery_charge_percent_missing_fields() {
+        let sd = SensorData::default();
+        assert!(sd.battery_charge_percent().is_none());
+    }
+
+    // Round 34: cargo bay digital input accessors
+    #[test]
+    fn cargo_bay_di_accessors() {
+        let mut sd = SensorData::default();
+        // bits 0..3 set, bit 4 (device detect) clear
+        sd.decode_packet(32, &[0x0F]).unwrap();
+        assert_eq!(sd.is_cargo_bay_di0(), Some(true));
+        assert_eq!(sd.is_cargo_bay_di1(), Some(true));
+        assert_eq!(sd.is_cargo_bay_di2(), Some(true));
+        assert_eq!(sd.is_cargo_bay_di3(), Some(true));
+        assert_eq!(sd.is_home_base_connected(), Some(false));
+    }
+
+    #[test]
+    fn home_base_connected_accessor() {
+        let mut sd = SensorData::default();
+        sd.decode_packet(32, &[0x10]).unwrap(); // only bit 4 set
+        assert_eq!(sd.is_cargo_bay_di0(), Some(false));
+        assert_eq!(sd.is_home_base_connected(), Some(true));
+    }
+
+    #[test]
+    fn cargo_bay_di_none_when_absent() {
+        let sd = SensorData::default();
+        assert_eq!(sd.is_cargo_bay_di0(), None);
+        assert_eq!(sd.is_home_base_connected(), None);
+    }
+
+    // Round 34: merge_from
+    #[test]
+    fn merge_from_updates_some_preserves_existing() {
+        let mut base = SensorData::default();
+        base.voltage = Some(12000);
+        base.wall = Some(false);
+
+        let mut patch = SensorData::default();
+        patch.wall = Some(true);
+        patch.oi_mode = Some(OiMode::Safe);
+
+        base.merge_from(&patch);
+
+        assert_eq!(base.voltage, Some(12000), "voltage must be preserved");
+        assert_eq!(base.wall, Some(true), "wall updated from patch");
+        assert_eq!(base.oi_mode, Some(OiMode::Safe), "oi_mode set from patch");
+    }
+
+    #[test]
+    fn merge_from_none_does_not_clear() {
+        let mut base = SensorData::default();
+        base.voltage = Some(12000);
+
+        let empty = SensorData::default();
+        base.merge_from(&empty);
+
+        assert_eq!(
+            base.voltage,
+            Some(12000),
+            "voltage must not be cleared by None"
+        );
     }
 }

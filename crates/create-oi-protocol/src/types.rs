@@ -206,6 +206,24 @@ pub enum CleanMode {
     Spot,
 }
 
+impl CleanMode {
+    /// Returns the human-readable name of this cleaning mode.
+    #[inline(always)]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Max => "Max",
+            Self::Spot => "Spot",
+        }
+    }
+}
+
+impl fmt::Display for CleanMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Day of week
 // ---------------------------------------------------------------------------
@@ -351,6 +369,73 @@ impl IrChar {
             Self::BuoyGreenRedAndForceField => "BuoyGreenRedAndForceField",
             Self::Unknown(_) => "Unknown",
         }
+    }
+    /// Returns `true` if this code was emitted by a Create 2 Remote Control.
+    ///
+    /// The remote control sends directional codes (`Left`, `ForwardLeft`,
+    /// `CenterLeft`, `CenterRight`, `ForwardRight`, `Right`) and `SeekDock`
+    /// to tell the robot to approach the home base.
+    #[inline(always)]
+    pub const fn is_remote_control(self) -> bool {
+        matches!(
+            self,
+            Self::Left
+                | Self::ForwardLeft
+                | Self::CenterLeft
+                | Self::CenterRight
+                | Self::ForwardRight
+                | Self::Right
+                | Self::SeekDock
+        )
+    }
+
+    /// Returns `true` if this is a dock approach beacon signal emitted by the
+    /// home base dock or a virtual wall beacon.
+    ///
+    /// The dock emits buoy and force-field IR codes to guide the robot's
+    /// approach. Virtual wall devices also emit `ForceField`.
+    #[inline(always)]
+    pub const fn is_dock_beacon(self) -> bool {
+        matches!(
+            self,
+            Self::ForceField
+                | Self::BuoyGreen
+                | Self::BuoyRed
+                | Self::BuoyGreenAndRed
+                | Self::BuoyGreenAndForceField
+                | Self::BuoyRedAndForceField
+                | Self::BuoyGreenRedAndForceField
+        )
+    }
+
+    /// Returns `true` if this code includes a virtual wall / force field
+    /// component. The force field is emitted by both the home base dock
+    /// (to prevent driving over it) and standalone virtual wall devices.
+    #[inline(always)]
+    pub const fn includes_force_field(self) -> bool {
+        matches!(
+            self,
+            Self::ForceField
+                | Self::BuoyGreenAndForceField
+                | Self::BuoyRedAndForceField
+                | Self::BuoyGreenRedAndForceField
+        )
+    }
+
+    /// Returns `true` if no IR signal is present (the [`IrChar::None`] variant).
+    ///
+    /// Named `is_no_signal` rather than `is_none` to avoid visual confusion
+    /// with [`Option::is_none`].
+    #[inline(always)]
+    pub const fn is_no_signal(self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Returns `true` if this is an unrecognized IR code not listed in the
+    /// Create 2 OI specification.
+    #[inline(always)]
+    pub const fn is_unknown(self) -> bool {
+        matches!(self, Self::Unknown(_))
     }
 }
 
@@ -628,5 +713,89 @@ mod tests {
         assert!(WheelPwm::try_from(0_i16).is_ok());
         assert_eq!(WheelPwm::try_from(256_i16), Err(256));
         assert_eq!(WheelPwm::try_from(-256_i16), Err(-256));
+    }
+
+    // Round 34: IrChar predicates
+    #[test]
+    fn irchar_is_no_signal() {
+        assert!(IrChar::None.is_no_signal());
+        assert!(!IrChar::Left.is_no_signal());
+        assert!(!IrChar::ForceField.is_no_signal());
+    }
+
+    #[test]
+    fn irchar_is_unknown() {
+        assert!(IrChar::Unknown(42).is_unknown());
+        assert!(!IrChar::None.is_unknown());
+        assert!(!IrChar::SeekDock.is_unknown());
+    }
+
+    #[test]
+    fn irchar_is_remote_control() {
+        // All RC directional codes and SeekDock
+        for code in [
+            IrChar::Left,
+            IrChar::ForwardLeft,
+            IrChar::CenterLeft,
+            IrChar::CenterRight,
+            IrChar::ForwardRight,
+            IrChar::Right,
+            IrChar::SeekDock,
+        ] {
+            assert!(
+                code.is_remote_control(),
+                "{code:?} should be remote control"
+            );
+        }
+        // Dock beacon codes are not RC
+        assert!(!IrChar::ForceField.is_remote_control());
+        assert!(!IrChar::BuoyGreen.is_remote_control());
+        assert!(!IrChar::None.is_remote_control());
+    }
+
+    #[test]
+    fn irchar_is_dock_beacon() {
+        for code in [
+            IrChar::ForceField,
+            IrChar::BuoyGreen,
+            IrChar::BuoyRed,
+            IrChar::BuoyGreenAndRed,
+            IrChar::BuoyGreenAndForceField,
+            IrChar::BuoyRedAndForceField,
+            IrChar::BuoyGreenRedAndForceField,
+        ] {
+            assert!(code.is_dock_beacon(), "{code:?} should be dock beacon");
+        }
+        // RC codes are not dock beacons
+        assert!(!IrChar::Left.is_dock_beacon());
+        assert!(!IrChar::SeekDock.is_dock_beacon());
+        assert!(!IrChar::None.is_dock_beacon());
+    }
+
+    #[test]
+    fn irchar_includes_force_field() {
+        assert!(IrChar::ForceField.includes_force_field());
+        assert!(IrChar::BuoyGreenAndForceField.includes_force_field());
+        assert!(IrChar::BuoyRedAndForceField.includes_force_field());
+        assert!(IrChar::BuoyGreenRedAndForceField.includes_force_field());
+        assert!(!IrChar::BuoyGreen.includes_force_field());
+        assert!(!IrChar::BuoyRed.includes_force_field());
+        assert!(!IrChar::SeekDock.includes_force_field());
+        assert!(!IrChar::None.includes_force_field());
+    }
+
+    // Round 34: CleanMode Display
+    #[test]
+    fn clean_mode_display() {
+        assert_eq!(CleanMode::Default.to_string(), "Default");
+        assert_eq!(CleanMode::Max.to_string(), "Max");
+        assert_eq!(CleanMode::Spot.to_string(), "Spot");
+    }
+
+    #[test]
+    fn clean_mode_name() {
+        assert_eq!(CleanMode::Default.name(), "Default");
+        assert_eq!(CleanMode::Max.name(), "Max");
+        assert_eq!(CleanMode::Spot.name(), "Spot");
     }
 }
