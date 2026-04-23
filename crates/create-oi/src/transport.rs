@@ -35,13 +35,15 @@ pub trait AsyncTransport: fmt::Debug {
 
     /// Write all bytes to the transport.
     ///
-    /// Implementations MUST begin forwarding bytes to the physical medium
-    /// immediately, without requiring an explicit [`flush`](AsyncTransport::flush).
-    /// A subsequent [`read`](AsyncTransport::read) call MUST be able to receive
-    /// a response based on the written bytes.  Implementations MUST NOT buffer
-    /// writes indefinitely; `flush()` may be used to drain hardware transmit
-    /// buffers (e.g. `tcdrain`), but it is not required for basic read-after-write
-    /// correctness.
+    /// Implementations MUST submit all bytes into the transport's transmit
+    /// path before returning, without requiring a subsequent
+    /// [`flush`](AsyncTransport::flush) call to make progress.
+    /// A following [`read`](AsyncTransport::read) call MUST be able to
+    /// receive a response to the written bytes without an intervening flush.
+    ///
+    /// `flush()` is for waiting until hardware transmit buffers have drained
+    /// (e.g. `tcdrain`), not for enabling basic request–response correctness.
+    /// Implementations MUST NOT hold bytes back indefinitely.
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
@@ -77,13 +79,15 @@ pub trait AsyncTransport: fmt::Debug {
 pub trait Transport: fmt::Debug + Send {
     /// Write all bytes to the transport.
     ///
-    /// Implementations MUST begin forwarding bytes to the physical medium
-    /// immediately, without requiring an explicit [`flush`](Transport::flush).
-    /// A subsequent [`read`](Transport::read) call MUST be able to receive
-    /// a response based on the written bytes.  Implementations MUST NOT buffer
-    /// writes indefinitely; `flush()` may be used to drain hardware transmit
-    /// buffers (e.g. `tcdrain`), but it is not required for basic read-after-write
-    /// correctness.
+    /// Implementations MUST submit all bytes into the transport's transmit
+    /// path before returning, without requiring a subsequent
+    /// [`flush`](Transport::flush) call to make progress.
+    /// A following [`read`](Transport::read) call MUST be able to
+    /// receive a response to the written bytes without an intervening flush.
+    ///
+    /// `flush()` is for waiting until hardware transmit buffers have drained
+    /// (e.g. `tcdrain`), not for enabling basic request–response correctness.
+    /// Implementations MUST NOT hold bytes back indefinitely.
     fn write_all(&mut self, data: &[u8]) -> std::io::Result<()>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.

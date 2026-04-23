@@ -79,11 +79,10 @@ impl AsyncTransport for SmolTransport {
     type Error = io::Error;
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        // Unblock enqueues bytes into its internal pipe and a background thread
-        // drains the pipe into NativePort::write() immediately.  For small
-        // serial commands (1–26 bytes), the background thread completes the OS
-        // write syscall long before the robot can respond, satisfying the
-        // AsyncTransport::write_all contract (read-after-write works without flush).
+        // Unblock enqueues bytes into its internal pipe; a background thread
+        // drains the pipe into NativePort::write() without requiring flush().
+        // Bytes are queued for transmission when write_all() returns, satisfying
+        // the AsyncTransport contract for request-response use.
         self.writer.write_all(data).await
     }
 
