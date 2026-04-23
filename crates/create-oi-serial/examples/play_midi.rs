@@ -117,8 +117,11 @@ struct Args {
     /// Sync power LED color and digit display to playback (pitch → color, note name display)
     #[arg(short = 'L', long)]
     led_sync: bool,
-}
 
+    /// Stop playback after this many chunks (useful for debugging long files)
+    #[arg(short = 'n', long)]
+    max_chunks: Option<NonZeroUsize>,
+}
 fn chunk_duration(chunk: &[SongNote]) -> Duration {
     Duration::from_micros(
         chunk
@@ -343,7 +346,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let notes = midi_to_notes(&bytes, &config)?;
     println!("{} notes parsed from MIDI file", notes.len());
-    let chunks = notes_to_chunks(notes);
+    let mut chunks = notes_to_chunks(notes);
+    if let Some(max) = args.max_chunks {
+        chunks.truncate(max.get());
+    }
     let n = chunks.len();
     println!("{n} song chunk(s) to play");
 

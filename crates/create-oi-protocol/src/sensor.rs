@@ -949,18 +949,22 @@ mod tests {
     // Round 34: battery_charge_percent
     #[test]
     fn battery_charge_percent_normal() {
-        let mut sd = SensorData::default();
-        sd.battery_charge = Some(2000);
-        sd.battery_capacity = Some(4000);
+        let sd = SensorData {
+            battery_charge: Some(2000),
+            battery_capacity: Some(4000),
+            ..Default::default()
+        };
         let pct = sd.battery_charge_percent().unwrap();
         assert!((pct - 50.0_f32).abs() < 0.01, "expected 50.0, got {pct}");
     }
 
     #[test]
     fn battery_charge_percent_full() {
-        let mut sd = SensorData::default();
-        sd.battery_charge = Some(4000);
-        sd.battery_capacity = Some(4000);
+        let sd = SensorData {
+            battery_charge: Some(4000),
+            battery_capacity: Some(4000),
+            ..Default::default()
+        };
         let pct = sd.battery_charge_percent().unwrap();
         assert!((pct - 100.0_f32).abs() < 0.01, "expected 100.0, got {pct}");
     }
@@ -968,18 +972,22 @@ mod tests {
     #[test]
     fn battery_charge_percent_over_capacity() {
         // Some firmware reports charge slightly above capacity; no clamping.
-        let mut sd = SensorData::default();
-        sd.battery_charge = Some(4050);
-        sd.battery_capacity = Some(4000);
+        let sd = SensorData {
+            battery_charge: Some(4050),
+            battery_capacity: Some(4000),
+            ..Default::default()
+        };
         let pct = sd.battery_charge_percent().unwrap();
         assert!(pct > 100.0, "should not clamp above 100%");
     }
 
     #[test]
     fn battery_charge_percent_zero_capacity() {
-        let mut sd = SensorData::default();
-        sd.battery_charge = Some(0);
-        sd.battery_capacity = Some(0);
+        let sd = SensorData {
+            battery_charge: Some(0),
+            battery_capacity: Some(0),
+            ..Default::default()
+        };
         assert!(
             sd.battery_charge_percent().is_none(),
             "zero capacity must return None"
@@ -1023,13 +1031,16 @@ mod tests {
     // Round 34: merge_from
     #[test]
     fn merge_from_updates_some_preserves_existing() {
-        let mut base = SensorData::default();
-        base.voltage = Some(12000);
-        base.wall = Some(false);
-
-        let mut patch = SensorData::default();
-        patch.wall = Some(true);
-        patch.oi_mode = Some(OiMode::Safe);
+        let mut base = SensorData {
+            voltage: Some(12000),
+            wall: Some(false),
+            ..Default::default()
+        };
+        let patch = SensorData {
+            wall: Some(true),
+            oi_mode: Some(OiMode::Safe),
+            ..Default::default()
+        };
 
         base.merge_from(&patch);
 
@@ -1040,11 +1051,12 @@ mod tests {
 
     #[test]
     fn merge_from_none_does_not_clear() {
-        let mut base = SensorData::default();
-        base.voltage = Some(12000);
+        let mut base = SensorData {
+            voltage: Some(12000),
+            ..Default::default()
+        };
 
-        let empty = SensorData::default();
-        base.merge_from(&empty);
+        base.merge_from(&SensorData::default());
 
         assert_eq!(
             base.voltage,

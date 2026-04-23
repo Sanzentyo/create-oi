@@ -91,7 +91,16 @@ impl AsyncTransport for SmolTransport {
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.port.flush().await
+        // `Unblock` buffers writes in an internal pipe; `flush().await` drains that
+        // pipe and calls `tcdrain()` on the underlying native port.  On macOS with
+        // USB serial adapters, `tcdrain()` can fail with `ETIMEDOUT` (the serialport
+        // crate maps repeated `EINTR` retries in `tcdrain` to `TimedOut`).  The bytes
+        // are already in the kernel TX buffer at this point, so treat `TimedOut` as
+        // success rather than propagating a misleading error that aborts playback.
+        match self.port.flush().await {
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(()),
+            other => other,
+        }
     }
 
     async fn delay(&mut self, duration: Duration) {
