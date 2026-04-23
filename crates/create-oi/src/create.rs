@@ -506,6 +506,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// Returns `ValidationError` if no stream is currently active (call
     /// `start_stream()` first).
+    #[must_use = "stream data must be processed; ignoring it causes the robot's serial buffer to fill"]
     pub fn poll_stream(&mut self) -> Result<Vec<SensorData>, Error<std::io::Error>> {
         self.reject_if_not_streaming()?;
         let mut buf = [0u8; 256];
@@ -524,6 +525,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     ///
     /// This is the no-alloc equivalent of [`poll_stream`](Self::poll_stream).
     /// Returns `ValidationError` if no stream is currently active.
+    #[must_use = "result must be checked"]
     pub fn poll_stream_with(
         &mut self,
         callback: impl FnMut(Result<SensorData, create_oi_protocol::error::ProtocolError>),

@@ -298,12 +298,17 @@ impl Velocity {
     /// Maximum raw OI velocity in mm/s (for reference).
     pub const MAX_MM_S: i16 = OI_MAX_VELOCITY_MM_S;
 
+    /// Construct a `Velocity` from a value in m/s.
+    ///
+    /// Returns `Err` if `value` is NaN, infinite, or outside
+    /// `[Self::MIN, Self::MAX]` (i.e. `-0.5 ..= 0.5` m/s).
     pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("Velocity", value)?;
         validate_range("Velocity", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
     }
 
+    /// Returns the velocity in m/s.
     #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
@@ -340,14 +345,20 @@ pub struct AngularVelocity(f32);
 impl AngularVelocity {
     /// Maximum angular velocity (rad/s): in-place spin at full wheel speed on Create 2.
     pub const MAX: f32 = 2.0 * MAX_VELOCITY_M_S / AXLE_LENGTH_CREATE2_M;
+    /// Minimum angular velocity (rad/s): same magnitude, opposite direction.
     pub const MIN: f32 = -(2.0 * MAX_VELOCITY_M_S / AXLE_LENGTH_CREATE2_M);
 
+    /// Construct an `AngularVelocity` from a value in rad/s.
+    ///
+    /// Returns `Err` if `value` is NaN, infinite, or outside
+    /// `[Self::MIN, Self::MAX]` (approximately `±4.26` rad/s on Create 2).
     pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("AngularVelocity", value)?;
         validate_range("AngularVelocity", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
     }
 
+    /// Returns the angular velocity in rad/s.
     #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
@@ -494,16 +505,23 @@ impl TryFrom<f32> for Radius {
 pub struct MotorPower(f32);
 
 impl MotorPower {
+    /// Maximum power (full forward / full positive torque).
     pub const MAX: f32 = 1.0;
+    /// Minimum power (full reverse / full negative torque).
     pub const MIN: f32 = -1.0;
+    /// Motor stopped.
     pub const OFF: Self = Self(0.0);
 
+    /// Construct a `MotorPower` from a normalised value in `[-1.0, 1.0]`.
+    ///
+    /// Returns `Err` if `value` is NaN, infinite, or outside `[Self::MIN, Self::MAX]`.
     pub fn new(value: f32) -> Result<Self, ValidationError> {
         validate_finite("MotorPower", value)?;
         validate_range("MotorPower", value, Self::MIN, Self::MAX)?;
         Ok(Self(value))
     }
 
+    /// Returns the normalised motor power in `[-1.0, 1.0]`.
     #[inline(always)]
     pub const fn get(self) -> f32 {
         self.0
@@ -554,14 +572,19 @@ impl From<MotorPower> for WheelPwm {
 pub struct PowerLedColor(u8);
 
 impl PowerLedColor {
+    /// Full green (0).
     pub const GREEN: Self = Self(0);
+    /// Full red (255).
     pub const RED: Self = Self(255);
 
+    /// Construct a `PowerLedColor` from a raw byte (0 = green, 255 = red).
+    /// All 256 values are valid; no validation is performed.
     #[inline(always)]
     pub const fn new(value: u8) -> Self {
         Self(value)
     }
 
+    /// Returns the raw color byte (0 = green, 255 = red).
     #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
@@ -593,14 +616,19 @@ impl core::fmt::Display for PowerLedColor {
 pub struct LedIntensity(u8);
 
 impl LedIntensity {
+    /// LED off.
     pub const OFF: Self = Self(0);
+    /// Full brightness.
     pub const FULL: Self = Self(255);
 
+    /// Construct an `LedIntensity` from a raw byte (0 = off, 255 = full).
+    /// All 256 values are valid; no validation is performed.
     #[inline(always)]
     pub const fn new(value: u8) -> Self {
         Self(value)
     }
 
+    /// Returns the raw intensity byte (0 = off, 255 = full brightness).
     #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
@@ -636,6 +664,11 @@ impl core::fmt::Display for LedIntensity {
 pub struct SongNumber(u8);
 
 impl SongNumber {
+    /// Construct a `SongNumber`.
+    ///
+    /// Valid range: `0..=15` (OI maximum).  The control layer
+    /// (`define_song`, `play_song`) further restricts this to the per-model
+    /// maximum via [`RobotModel::max_song_number`].
     pub const fn new(value: u8) -> Result<Self, ValidationError> {
         if value > OI_MAX_SONG_NUMBER {
             return Err(ValidationError {
@@ -646,6 +679,7 @@ impl SongNumber {
         Ok(Self(value))
     }
 
+    /// Returns the song number as a raw byte (0–15).
     #[inline(always)]
     pub const fn get(self) -> u8 {
         self.0
