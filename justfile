@@ -54,3 +54,7 @@ doc:
 # Check the workspace compiles without producing artifacts
 check:
     cargo check --workspace --all-targets
+
+# Run cargo-deny license and ban checks
+deny:
+    cargo deny check licenses bans

@@ -3,8 +3,8 @@
 # Upstream attribution: libcreate (BSD-3-Clause) — see NOTICE
 #
 # License policy:
-#   GREEN  – MIT, Apache-2.0, BSD-*, ISC, Unlicense, CC0, Zlib, BSL-1.0,
-#             Unicode-3.0, OpenSSL, MIT-0  (all permissive)
+#   GREEN  – MIT, Apache-2.0, BSD-*, Unlicense, CC0, Zlib, BSL-1.0,
+#             Unicode-3.0, MIT-0  (all permissive)
 #   YELLOW – MPL-2.0 (serialport only): weak/file-scoped copyleft.
 #             Linking is permitted; modifications to MPL files must be shared.
 #   RED    – GPL, LGPL, AGPL, CDDL and any other strong copyleft not listed
@@ -40,14 +40,11 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "Unlicense",
     "CC0-1.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
     "BSL-1.0",   # Boost Software License – permissive (ryu)
-    "OpenSSL",
 ]
 confidence-threshold = 0.8
 
