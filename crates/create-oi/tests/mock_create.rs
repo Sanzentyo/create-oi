@@ -497,7 +497,7 @@ fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn poll_stream_eof_returns_protocol_error() {
+fn poll_stream_eof_returns_disconnected() {
     let mock = MockTransport::with_eof_on_read();
     let create = Create::new(mock, RobotModel::Create2);
     let mut create = create.start().unwrap();
@@ -506,13 +506,8 @@ fn poll_stream_eof_returns_protocol_error() {
     create.start_stream(&[8]).unwrap(); // write succeeds even with eof_on_read
     let err = create.poll_stream().unwrap_err();
     assert!(
-        matches!(
-            err,
-            create_oi::error::Error::Protocol(
-                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 }
-            )
-        ),
-        "expected InsufficientData on EOF, got {err:?}"
+        matches!(err, create_oi::error::Error::Disconnected),
+        "expected Disconnected on EOF, got {err:?}"
     );
 }
 

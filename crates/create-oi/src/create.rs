@@ -511,9 +511,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
-            return Err(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
-            ));
+            return Err(Error::Disconnected);
         }
         let results = self.stream_parser.feed(&buf[..n]);
         results
@@ -534,9 +532,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf).map_err(Error::Io)?;
         if n == 0 {
-            return Err(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::InsufficientData { need: 1, got: 0 },
-            ));
+            return Err(Error::Disconnected);
         }
         self.stream_parser.feed_with(&buf[..n], callback);
         Ok(())
@@ -1118,12 +1114,7 @@ impl<M: Mode, T: Transport> Create<M, T> {
         while offset < buf.len() {
             let n = self.transport.read(&mut buf[offset..]).map_err(Error::Io)?;
             if n == 0 {
-                return Err(Error::Protocol(
-                    create_oi_protocol::error::ProtocolError::InsufficientData {
-                        need: buf.len(),
-                        got: offset,
-                    },
-                ));
+                return Err(Error::Disconnected);
             }
             offset += n;
         }

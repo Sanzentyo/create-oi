@@ -44,6 +44,15 @@ pub enum Error<E> {
 
     /// A value was invalid for its domain type.
     Validation(ValidationError),
+
+    /// The transport returned zero bytes, indicating that the connection was
+    /// closed or the robot was disconnected.
+    ///
+    /// This is distinct from [`Protocol`](Error::Protocol) errors (which
+    /// indicate malformed wire data) and [`Io`](Error::Io) errors (which
+    /// indicate a transport failure with an error code). A zero-byte read
+    /// is a clean EOF: the robot stopped responding.
+    Disconnected,
 }
 
 impl<E: fmt::Display> fmt::Display for Error<E> {
@@ -52,6 +61,7 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Protocol(e) => write!(f, "{e}"),
             Self::Validation(e) => write!(f, "{e}"),
+            Self::Disconnected => write!(f, "robot disconnected (transport returned 0 bytes)"),
         }
     }
 }
@@ -63,6 +73,7 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
             Self::Io(e) => Some(e),
             Self::Protocol(e) => Some(e),
             Self::Validation(e) => Some(e),
+            Self::Disconnected => None,
         }
     }
 }

@@ -74,7 +74,13 @@ const WHEEL_DIAMETER_M: f32 = 0.078;
 /// Encoder ticks per wheel revolution for Create 2.
 const TICKS_PER_REV_CREATE2: f32 = 508.8;
 
-/// Recommended delay after mode-change commands, in milliseconds.
+/// Post-mode-change delay inserted after START, SAFE, FULL, and similar
+/// transitions, in milliseconds.
+///
+/// The OI spec does not mandate a specific inter-command delay for mode
+/// transitions (unlike the 100 ms baud-rate delay, which is explicit in the
+/// spec). 20 ms is an empirically reliable value observed across Create 2
+/// hardware variants.
 const MODE_CHANGE_DELAY_MS: u64 = 20;
 
 // ---------------------------------------------------------------------------
