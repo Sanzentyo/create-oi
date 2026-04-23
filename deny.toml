@@ -1,239 +1,168 @@
-# This template contains all of the possible sections and their default values
+# cargo-deny policy for create-oi workspace
+# Project license: MIT OR Apache-2.0 (dual)
+# Upstream attribution: libcreate (BSD-3-Clause) — see NOTICE
+#
+# License policy:
+#   GREEN  – MIT, Apache-2.0, BSD-*, ISC, Unlicense, CC0, Zlib, BSL-1.0,
+#             Unicode-3.0, OpenSSL, MIT-0  (all permissive)
+#   YELLOW – MPL-2.0 (serialport only): weak/file-scoped copyleft.
+#             Linking is permitted; modifications to MPL files must be shared.
+#   RED    – GPL, LGPL, AGPL, CDDL and any other strong copyleft not listed
+#             above are implicitly denied by the allow list.
 
-# Note that all fields that take a lint level have these possible values:
-# * deny - An error will be produced and the check will fail
-# * warn - A warning will be produced, but the check will not fail
-# * allow - No warning or error will be produced, though in some cases a note
-# will be
-
-# The values provided in this template are the default values that will be used
-# when any section or field is not specified in your own configuration
-
-# Root options
-
-# The graph table configures how the dependency graph is constructed and thus
-# which crates the checks are performed against
+# ---------------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------------
 [graph]
-# If 1 or more target triples (and optionally, target_features) are specified,
-# only the specified targets will be checked when running `cargo deny check`.
-# This means, if a particular package is only ever used as a target specific
-# dependency, such as, for example, the `nix` crate only being used via the
-# `target_family = "unix"` configuration, that only having windows targets in
-# this list would mean the nix crate, as well as any of its exclusive
-# dependencies not shared by any other crates, would be ignored, as the target
-# list here is effectively saying which targets you are building for.
-targets = [
-    # The triple can be any string, but only the target triples built in to
-    # rustc (as of 1.40) can be checked against actual config expressions
-    #"x86_64-unknown-linux-musl",
-    # You can also specify which target_features you promise are enabled for a
-    # particular target. target_features are currently not validated against
-    # the actual valid features supported by the target architecture.
-    #{ triple = "wasm32-unknown-unknown", features = ["atomics"] },
-]
-# When creating the dependency graph used as the source of truth when checks are
-# executed, this field can be used to prune crates from the graph, removing them
-# from the view of cargo-deny. This is an extremely heavy hammer, as if a crate
-# is pruned from the graph, all of its dependencies will also be pruned unless
-# they are connected to another crate in the graph that hasn't been pruned,
-# so it should be used with care. The identifiers are [Package ID Specifications]
-# (https://doc.rust-lang.org/cargo/reference/pkgid-spec.html)
-#exclude = []
-# If true, metadata will be collected with `--all-features`. Note that this can't
-# be toggled off if true, if you want to conditionally enable `--all-features` it
-# is recommended to pass `--all-features` on the cmd line instead
+# Check all workspace members (including create-oi-dora, create-oi-embassy).
 all-features = false
-# If true, metadata will be collected with `--no-default-features`. The same
-# caveat with `all-features` applies
 no-default-features = false
-# If set, these feature will be enabled when collecting metadata. If `--features`
-# is specified on the cmd line they will take precedence over this option.
-#features = []
 
-# The output table provides options for how/if diagnostics are outputted
 [output]
-# When outputting inclusion graphs in diagnostics that include features, this
-# option can be used to specify the depth at which feature edges will be added.
-# This option is included since the graphs can be quite large and the addition
-# of features from the crate(s) to all of the graph roots can be far too verbose.
-# This option can be overridden via `--feature-depth` on the cmd line
 feature-depth = 1
 
-# This section is considered when running `cargo deny check advisories`
-# More documentation for the advisories section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+# ---------------------------------------------------------------------------
+# Advisories  (security – run separately with `cargo deny check advisories`)
+# ---------------------------------------------------------------------------
 [advisories]
-# The path where the advisory databases are cloned/fetched into
-#db-path = "$CARGO_HOME/advisory-dbs"
-# The url(s) of the advisory databases to use
-#db-urls = ["https://github.com/rustsec/advisory-db"]
-# A list of advisory IDs to ignore. Note that ignored advisories will still
-# output a note when they are encountered.
-ignore = [
-    #"RUSTSEC-0000-0000",
-    #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
-    #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
-    #{ crate = "a-crate-that-is-yanked@0.1.1", reason = "you can specify why you are ignoring the yanked crate" },
-]
-# If this is true, then cargo deny will use the git executable to fetch advisory database.
-# If this is false, then it uses a built-in git library.
-# Setting this to true can be helpful if you have special authentication requirements that cargo-deny does not support.
-# See Git Authentication for more information about setting up git authentication.
-#git-fetch-with-cli = true
+ignore = []
 
-# This section is considered when running `cargo deny check licenses`
-# More documentation for the licenses section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
 [licenses]
-# List of explicitly allowed licenses
-# See https://spdx.org/licenses/ for list of possible licenses
-# [possible values: any SPDX 3.11 short identifier (+ optional exception)].
+# Only permissive licenses are allowed for this MIT OR Apache-2.0 project.
+# Anything NOT in this list is implicitly denied (GPL, LGPL, AGPL, CDDL, …).
 allow = [
-    #"MIT",
-    #"Apache-2.0",
-    #"Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",   # Boost Software License – permissive (ryu)
+    "OpenSSL",
 ]
-# The confidence threshold for detecting a license from license text.
-# The higher the value, the more closely the license text must be to the
-# canonical license text of a valid SPDX license file.
-# [possible values: any between 0.0 and 1.0].
 confidence-threshold = 0.8
-# Allow 1 or more licenses on a per-crate basis, so that particular licenses
-# aren't accepted for every possible crate as with the normal allow list
+
+# Per-crate exceptions for licenses not in the allow list above.
 exceptions = [
-    # Each entry is the crate and version constraint, and its specific allow
-    # list
-    #{ allow = ["Zlib"], crate = "adler32" },
+    # serialport = "4.9" — MPL-2.0 (Mozilla Public License 2.0)
+    # STATUS: YELLOW
+    # MPL-2.0 is file-scoped copyleft: you must publish changes to the
+    # MPL-licensed source files, but linking with other-licensed code
+    # (including MIT/Apache-2.0 crates) is explicitly allowed.
+    # This crate is used as-is (no MPL file modifications), so binary
+    # distribution under MIT OR Apache-2.0 is acceptable.
+    # Reference: https://www.mozilla.org/en-US/MPL/2.0/FAQ/
+    { allow = ["MPL-2.0"], crate = "serialport" },
 ]
 
-# Some crates don't have (easily) machine readable licensing information,
-# adding a clarification entry for it allows you to manually specify the
-# licensing information
-#[[licenses.clarify]]
-# The package spec the clarification applies to
-#crate = "ring"
-# The SPDX expression for the license requirements of the crate
-#expression = "MIT AND ISC AND OpenSSL"
-# One or more files in the crate's source used as the "source of truth" for
-# the license expression. If the contents match, the clarification will be used
-# when running the license check, otherwise the clarification will be ignored
-# and the crate will be checked normally, which may produce warnings or errors
-# depending on the rest of your configuration
-#license-files = [
-# Each entry is a crate relative path, and the (opaque) hash of its contents
-#{ path = "LICENSE", hash = 0xbd0eed23 }
-#]
+# Notes on OR-expression licenses that pass via the allow list above:
+#   • unescaper  GPL-3.0/MIT          → MIT chosen             (GREEN via OR)
+#   • r-efi      MIT OR Apache-2.0 OR LGPL-2.1-or-later
+#                                     → MIT/Apache-2.0 chosen  (GREEN via OR)
+#   • uhlc       EPL-2.0 OR Apache-2.0 → Apache-2.0 chosen    (GREEN via OR)
 
 [licenses.private]
-# If true, ignores workspace crates that aren't published, or are only
-# published to private registries.
-# To see how to mark a crate as unpublished (to the official registry),
-# visit https://doc.rust-lang.org/cargo/reference/manifest.html#the-publish-field.
 ignore = false
-# One or more private registries that you might publish crates to, if a crate
-# is only published to private registries, and ignore is true, the crate will
-# not have its license(s) checked
-registries = [
-    #"https://sekretz.com/registry
-]
+registries = []
 
-# This section is considered when running `cargo deny check bans`.
-# More documentation about the 'bans' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+# ---------------------------------------------------------------------------
+# Bans  (duplicate crate versions + explicitly banned crates)
+# ---------------------------------------------------------------------------
 [bans]
-# Lint level for when multiple versions of the same crate are detected
 multiple-versions = "warn"
-# Lint level for when a crate version requirement is `*`
 wildcards = "allow"
-# The graph highlighting used when creating dotgraphs for crates
-# with multiple versions
-# * lowest-version - The path to the lowest versioned duplicate is highlighted
-# * simplest-path - The path to the version with the fewest edges is highlighted
-# * all - Both lowest-version and simplest-path are used
 highlight = "all"
-# The default lint level for `default` features for crates that are members of
-# the workspace that is being checked. This can be overridden by allowing/denying
-# `default` on a crate-by-crate basis if desired.
 workspace-default-features = "allow"
-# The default lint level for `default` features for external crates that are not
-# members of the workspace. This can be overridden by allowing/denying `default`
-# on a crate-by-crate basis if desired.
 external-default-features = "allow"
-# List of crates that are allowed. Use with care!
-allow = [
-    #"ansi_term@0.11.0",
-    #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason it is allowed" },
-]
-# If true, workspace members are automatically allowed even when using deny-by-default
-# This is useful for organizations that want to deny all external dependencies by default
-# but allow their own workspace crates without having to explicitly list them
-allow-workspace = false
-# List of crates to deny
-deny = [
-    #"ansi_term@0.11.0",
-    #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason it is banned" },
-    # Wrapper crates can optionally be specified to allow the crate when it
-    # is a direct dependency of the otherwise banned crate
-    #{ crate = "ansi_term@0.11.0", wrappers = ["this-crate-directly-depends-on-ansi_term"] },
-]
+allow = []
+deny = []
 
-# List of features to allow/deny
-# Each entry the name of a crate and a version range. If version is
-# not specified, all versions will be matched.
-#[[bans.features]]
-#crate = "reqwest"
-# Features to not allow
-#deny = ["json"]
-# Features to allow
-#allow = [
-#    "rustls",
-#    "__rustls",
-#    "__tls",
-#    "hyper-rustls",
-#    "rustls",
-#    "rustls-pemfile",
-#    "rustls-tls-webpki-roots",
-#    "tokio-rustls",
-#    "webpki-roots",
-#]
-# If true, the allowed features must exactly match the enabled feature set. If
-# this is set there is no point setting `deny`
-#exact = true
-
-# Certain crates/versions that will be skipped when doing duplicate detection.
+# Skip older versions that coexist with current versions due to different
+# ecosystem generations pulling them in transitively.  These cannot be
+# resolved without upstream bumps in dora-node-api / embedded-hal / etc.
 skip = [
-    #"ansi_term@0.11.0",
-    #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason why it can't be updated/removed" },
+    # thiserror: workspace uses v2; dora-* ecosystem still requires v1
+    { crate = "thiserror@1.0.69",      reason = "dora-* ecosystem requires thiserror v1; workspace uses v2" },
+    { crate = "thiserror-impl@1.0.69", reason = "dora-* ecosystem requires thiserror-impl v1; workspace uses v2" },
+    # embedded-hal: v0.2 (legacy HAL) and v1.0 (stable HAL) are incompatible API generations
+    { crate = "embedded-hal@0.2.7",    reason = "legacy HAL API required by some transitive deps; v1.0 is the current target" },
+    # nb: follows embedded-hal versioning (0.1 legacy, 1.x current)
+    # Note: nb@0.1.3 may or may not be present depending on resolved features
+    # rand / getrandom / rand_core / rand_chacha: rand 0.8 (older) vs 0.9 (current)
+    { crate = "rand@0.8.6",            reason = "rand 0.8 pulled by older transitive deps; workspace targets rand 0.9" },
+    { crate = "rand_chacha@0.3.1",     reason = "rand_chacha 0.3 pulled by rand 0.8 transitive deps" },
+    { crate = "rand_core@0.6.4",       reason = "rand_core 0.6 pulled by rand 0.8 transitive deps" },
+    { crate = "getrandom@0.2.17",      reason = "getrandom 0.2 pulled by rand 0.8 transitive deps" },
+    { crate = "getrandom@0.3.4",       reason = "getrandom 0.3 pulled by rand 0.9 transitive deps" },
+    # r-efi: two versions from different sub-ecosystems
+    { crate = "r-efi@5.3.0",           reason = "older r-efi version pulled by transitive WASI/UEFI deps" },
+    # opentelemetry: 0.23 pulled by dora-metrics, 0.29 by newer opentelemetry-otlp
+    { crate = "opentelemetry@0.23.0",      reason = "dora-metrics requires opentelemetry 0.23; main deps target 0.29" },
+    { crate = "opentelemetry_sdk@0.23.0",  reason = "dora-metrics requires opentelemetry_sdk 0.23; main deps target 0.29" },
+    # ordered-float: 2.x pulled by dora-related flatbuffers/arrow deps
+    { crate = "ordered-float@2.10.1",  reason = "dora/arrow ecosystem requires ordered-float 2.x" },
+    # bitflags: 1.x pulled by older transitive deps
+    { crate = "bitflags@1.3.2",        reason = "bitflags 1.x required by older transitive deps; workspace uses 2.x" },
+    # hashbrown: multiple versions from std/indexmap/ahash each pinning their own
+    { crate = "hashbrown@0.12.3",      reason = "indexmap 1.x requires hashbrown 0.12" },
+    { crate = "hashbrown@0.15.5",      reason = "indexmap 2.x / ahash ecosystem requires hashbrown 0.15" },
+    # indexmap: 1.x pulled by older ecosystem (arrow, dora), 2.x is current
+    { crate = "indexmap@1.9.3",        reason = "arrow/dora ecosystem requires indexmap 1.x; workspace targets 2.x" },
+    # tower: 0.4 (older) pulled by tonic / dora; 0.5 is current
+    { crate = "tower@0.4.13",          reason = "tonic/dora ecosystem requires tower 0.4; workspace targets 0.5" },
+    # windows / windows-*: many sub-crate versions from different ecosystem generations
+    { crate = "windows@0.34.0",                reason = "pulled by older windows ecosystem transitive deps" },
+    { crate = "windows-core@0.57.0",           reason = "pulled by windows 0.57 transitive deps" },
+    { crate = "windows-implement@0.57.0",      reason = "pulled by windows 0.57 transitive deps" },
+    { crate = "windows-interface@0.57.0",      reason = "pulled by windows 0.57 transitive deps" },
+    { crate = "windows-result@0.1.2",          reason = "pulled by windows 0.57 transitive deps" },
+    { crate = "windows-sys@0.48.0",            reason = "pulled by older ecosystem (rustix 0.38, nix 0.26, etc.)" },
+    { crate = "windows-sys@0.52.0",            reason = "pulled by mid-generation ecosystem deps" },
+    { crate = "windows-sys@0.59.0",            reason = "pulled by rustix 0.38 / dora-core transitive deps" },
+    { crate = "windows-targets@0.48.5",        reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_aarch64_gnullvm@0.48.5",reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_aarch64_msvc@0.34.0",   reason = "pulled by windows 0.34 transitive deps" },
+    { crate = "windows_aarch64_msvc@0.48.5",   reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_i686_gnu@0.34.0",       reason = "pulled by windows 0.34 transitive deps" },
+    { crate = "windows_i686_gnu@0.48.5",       reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_i686_msvc@0.34.0",      reason = "pulled by windows 0.34 transitive deps" },
+    { crate = "windows_i686_msvc@0.48.5",      reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_x86_64_gnu@0.34.0",     reason = "pulled by windows 0.34 transitive deps" },
+    { crate = "windows_x86_64_gnu@0.48.5",     reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_x86_64_gnullvm@0.48.5", reason = "pulled by windows-sys 0.48 transitive deps" },
+    { crate = "windows_x86_64_msvc@0.34.0",    reason = "pulled by windows 0.34 transitive deps" },
+    { crate = "windows_x86_64_msvc@0.48.5",    reason = "pulled by windows-sys 0.48 transitive deps" },
+    # linux-raw-sys: 0.4 pulled by rustix 0.38; 0.12 is used by rustix 1.x
+    { crate = "linux-raw-sys@0.4.15",  reason = "rustix 0.38 requires linux-raw-sys 0.4; rustix 1.x uses 0.12" },
+    # rustix: 0.38 pulled by older ecosystem (mio-serial etc.); 1.x is current
+    { crate = "rustix@0.38.44",        reason = "mio-serial/older ecosystem requires rustix 0.38; workspace targets 1.x" },
+    # nix: three versions from different generations of unix-api deps
+    { crate = "nix@0.23.2",            reason = "pulled by libudev-sys / older serial ecosystem" },
+    { crate = "nix@0.26.4",            reason = "pulled by mid-generation deps" },
+    # wit-bindgen: two generations from wasmtime ecosystem
+    { crate = "wit-bindgen@0.46.0",    reason = "pulled by one wasm ecosystem generation" },
 ]
-# Similarly to `skip` allows you to skip certain crates during duplicate
-# detection. Unlike skip, it also includes the entire tree of transitive
-# dependencies starting at the specified crate, up to a certain depth, which is
-# by default infinite.
-skip-tree = [
-    #"ansi_term@0.11.0", # will be skipped along with _all_ of its direct and transitive dependencies
-    #{ crate = "ansi_term@0.11.0", depth = 20 },
-]
+skip-tree = []
 
-# This section is considered when running `cargo deny check sources`.
-# More documentation about the 'sources' section can be found here:
-# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
 [sources]
-# Lint level for what to happen when a crate from a crate registry that is not
-# in the allow list is encountered
 unknown-registry = "warn"
-# Lint level for what to happen when a crate from a git repository that is not
-# in the allow list is encountered
 unknown-git = "warn"
-# List of URLs for allowed crate registries. Defaults to the crates.io index
-# if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# List of URLs for allowed Git repositories
 allow-git = []
 
 [sources.allow-org]
-# github.com organizations to allow git sources for
 github = []
-# gitlab.com organizations to allow git sources for
 gitlab = []
-# bitbucket.org organizations to allow git sources for
 bitbucket = []
