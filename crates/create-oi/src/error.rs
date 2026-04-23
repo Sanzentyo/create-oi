@@ -35,10 +35,12 @@ impl std::error::Error for ValidationError {}
 /// `E` is the transport's error type — for `std` users this is typically
 /// `std::io::Error`, for embedded targets it is whatever the HAL provides.
 ///
-/// This enum is marked `#[non_exhaustive]` to allow new variants to be added
-/// in minor releases without a breaking semver change.
+/// This enum is intentionally **exhaustive**: callers can (and should) write
+/// exhaustive `match` arms.  If a new variant is added in the future, the
+/// compiler will flag any match arm that no longer covers all cases, giving
+/// callers a chance to handle it explicitly rather than falling through to a
+/// wildcard.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum Error<E> {
     /// An underlying transport I/O operation failed.
     Io(E),

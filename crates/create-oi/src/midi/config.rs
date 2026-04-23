@@ -130,10 +130,10 @@ pub enum VoiceSelection {
 
 /// Error type for MIDI parsing.
 ///
-/// This enum is marked `#[non_exhaustive]` to allow new variants to be added
-/// in minor releases without a breaking semver change.
+/// This enum is intentionally **exhaustive**: callers can write exhaustive
+/// `match` arms.  If a new variant is added, the compiler will flag incomplete
+/// match statements.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum MidiError {
     /// The MIDI byte stream could not be parsed.
     Parse(midly::Error),

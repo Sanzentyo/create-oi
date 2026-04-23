@@ -27,8 +27,8 @@ All notable changes to the `create-oi` workspace are documented here.
 - **`Error::Disconnected`**: zero-byte transport reads now return a dedicated
   `Disconnected` variant instead of `Protocol(InsufficientData)`.  Applies to all
   six read sites in both sync and async paths.
-- `Error<E>` and `MidiError` are `#[non_exhaustive]`; future variants will not
-  require a major version bump.
+- `Error<E>` and `MidiError` are intentionally exhaustive enums; callers should
+  write complete `match` arms so the compiler catches unhandled variants.
 - `Transport::write_all` / `AsyncTransport::write_all` contract clarified:
   implementations must submit bytes into the transmit path without requiring a
   subsequent `flush()` call for basic request–response correctness.
