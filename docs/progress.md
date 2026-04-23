@@ -1320,3 +1320,33 @@ After all chunks finish, `--led-sync` clears both outputs before `to_passive()`:
 - `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
 - `cargo package --list --allow-dirty -p create-oi`: README.md included
 - `cargo publish --dry-run --allow-dirty -p create-oi-protocol`: passes
+
+---
+
+## Round 34 — Code Quality: IrChar predicates, SensorData utilities, CleanMode Display
+
+**Commit:** 879c8d9
+
+### Changes
+
+#### `crates/create-oi-protocol/src/types.rs`
+
+- **`IrChar`** — new predicate methods with correct OI spec semantics:
+  - `is_remote_control()` — matches Left/ForwardLeft/CenterLeft/CenterRight/ForwardRight/Right/SeekDock (RC codes from the iRobot remote)
+  - `is_dock_beacon()` — matches ForceField/Buoy* codes emitted by the home base dock and virtual wall beacons
+  - `includes_force_field()` — matches ForceField plus any Buoy*AndForceField variant
+  - `is_no_signal()` — matches the `None` variant (named to avoid confusion with `Option::is_none`)
+  - `is_unknown()` — matches `Unknown(_)` for unrecognized IR codes
+- **`CleanMode`** — added `name() -> &'static str` const method and `fmt::Display` impl (consistent with `OiMode`, `ChargingState`, etc.)
+- **Bug fix**: `#[deprecated(since = "0.5.0")]` → `since = "0.4.0"` on `is_stasis_detected` (deprecation is part of this release)
+
+#### `crates/create-oi-protocol/src/sensor.rs`
+
+- **`SensorData::battery_charge_percent()`** — returns `None` when capacity is 0 (undefined denominator) or either field is absent; returns raw ratio without clamping (firmware can report charge > capacity)
+- **`SensorData::is_cargo_bay_di0/1/2/3()`** — bit-field accessors for cargo bay digital inputs (packet 32, bits 0–3)
+- **`SensorData::is_home_base_connected()`** — bit 4 of packet 32 (Device Detect / Home Base Connect)
+- **`SensorData::merge_from()`** — "latest Some wins" update for streaming snapshot accumulation; clearly documents that delta fields (`distance_delta_mm`, `angle_delta_deg`) are overwritten not summed
+
+#### Tests
+- 23 new unit tests across both files covering all new methods
+- Total test count increased from 363 to 380

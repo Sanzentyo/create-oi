@@ -456,19 +456,6 @@ impl SensorData {
         }
     }
 
-    /// Returns `true` if the robot is making forward progress.
-    ///
-    /// # Deprecated
-    ///
-    /// The name "stasis_detected" is misleading — this function returns `true`
-    /// when the robot IS moving, not when it is stationary. Use
-    /// [`is_making_forward_progress`](Self::is_making_forward_progress) instead.
-    #[deprecated(since = "0.4.0", note = "use `is_making_forward_progress` instead")]
-    #[inline(always)]
-    pub const fn is_stasis_detected(&self) -> Option<bool> {
-        self.is_making_forward_progress()
-    }
-
     // -----------------------------------------------------------------------
     // Cargo bay digital inputs (packet 32)
     // -----------------------------------------------------------------------
@@ -891,14 +878,6 @@ mod tests {
         // reserved bits + bit 0 → detected
         sd.decode_packet(58, &[0xFF]).unwrap();
         assert_eq!(sd.is_making_forward_progress(), Some(true));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn stasis_deprecated_alias_works() {
-        let mut sd = SensorData::default();
-        sd.decode_packet(58, &[0x01]).unwrap();
-        assert_eq!(sd.is_stasis_detected(), Some(true));
     }
 
     // Round 14: has_duplicate_ids tests
