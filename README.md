@@ -22,7 +22,7 @@ protocol.
 | [`create-oi-serial`](crates/create-oi-serial) | Sync serial transport (`serialport`) |
 | [`create-oi-tokio`](crates/create-oi-tokio) | Async serial transport (Tokio) |
 | [`create-oi-embassy`](crates/create-oi-embassy) | Async embedded transport (Embassy) |
-| [`create-oi-smol`](crates/create-oi-smol) | Async serial transport (Smol, experimental) |
+| [`create-oi-smol`](crates/create-oi-smol) | Async serial transport (Smol) |
 | [`create-oi-dora`](crates/create-oi-dora) | dora-rs dataflow integration |
 
 ## Feature Flags

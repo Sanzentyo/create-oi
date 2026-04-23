@@ -1,15 +1,22 @@
 //! Smol async transport for the Create/Roomba.
 //!
-//! Uses [`smol::Unblock`] to wrap the native `serialport::TTYPort` for
-//! non-blocking async I/O on the smol runtime. Blocking I/O is dispatched
-//! to a thread pool, keeping the executor free.
+//! Uses [`smol::Unblock`] to wrap the native serial port for non-blocking
+//! async I/O on the smol runtime.  Blocking I/O is dispatched to a thread
+//! pool, keeping the executor free.
 //!
-//! # Platform Support
+//! | Platform | Native type |
+//! |----------|-------------|
+//! | Unix     | `serialport::TTYPort` |
+//! | Windows  | `serialport::COMPort` |
 //!
-//! `serialport::TTYPort` is Unix-only. On non-Unix platforms this module
-//! is empty and `SmolTransport` is not available.
+//! Other platforms are not supported.
 
-#![cfg(unix)]
+#[cfg(windows)]
+use serialport::COMPort as NativePort;
+#[cfg(unix)]
+use serialport::TTYPort as NativePort;
+#[cfg(not(any(unix, windows)))]
+compile_error!("create-oi-smol requires Unix or Windows; other platforms are not yet supported");
 
 use std::io;
 use std::time::Duration;
@@ -25,11 +32,11 @@ pub use create_oi;
 
 /// Async transport for the smol runtime.
 ///
-/// Wraps a native `serialport::TTYPort` in [`smol::Unblock`], which runs
+/// Wraps a native serial port in [`smol::Unblock`], which runs
 /// blocking serial I/O on a thread pool without blocking the async executor.
 #[derive(Debug)]
 pub struct SmolTransport {
-    port: Unblock<serialport::TTYPort>,
+    port: Unblock<NativePort>,
 }
 
 impl SmolTransport {
@@ -77,7 +84,7 @@ impl AsyncTransport for SmolTransport {
 impl AsyncBaudConfigurable for SmolTransport {
     async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
         use serialport::SerialPort;
-        // get_mut() waits until in-flight thread-pool operations complete and returns &mut TTYPort.
+        // get_mut() waits until in-flight thread-pool operations complete and returns &mut NativePort.
         let port = self.port.get_mut().await;
         port.set_baud_rate(rate.baud_u32())
             .map_err(io::Error::other)
