@@ -192,6 +192,16 @@ use embedded_io_async::{ErrorType, Read, Write};
 /// The generic type `T` is typically a UART peripheral from an Embassy HAL,
 /// e.g. `embassy_stm32::usart::Uart<'_, Async>` or
 /// `embassy_rp::uart::BufferedUart<'_, UART0>`.
+///
+/// # Precondition: flush-free write progress
+///
+/// This adapter implements the [`AsyncTransport::write_all`] contract, which
+/// requires that bytes submitted via `write_all()` make progress toward the
+/// physical medium without needing an explicit `flush()`. Standard Embassy
+/// UART drivers (DMA or buffered) satisfy this — they begin transmitting as
+/// soon as bytes are queued. If you pass a custom `T` that buffers writes
+/// internally and only flushes on explicit `flush()`, sensor queries will
+/// deadlock because the robot will never receive the query command.
 pub struct EmbassyTransport<T> {
     io: T,
 }
@@ -269,6 +279,14 @@ where
 /// - `R` — the read (RX) half; must implement [`embedded_io_async::Read`].
 /// - `W` — the write (TX) half; must implement [`embedded_io_async::Write`].
 /// - `E` — the shared error type (inferred from `R` and `W`).
+///
+/// # Precondition: flush-free write progress
+///
+/// The write half `W` must make progress toward the physical medium without
+/// an explicit `flush()`. Standard Embassy UART TX halves (DMA or buffered)
+/// satisfy this — bytes begin transmitting as soon as they are queued.
+/// If `W` buffers writes internally and only transmits on `flush()`, sensor
+/// queries will deadlock because the robot will never receive the query command.
 pub struct EmbassySplitTransport<R, W> {
     rx: R,
     tx: W,

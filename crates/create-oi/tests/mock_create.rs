@@ -25,6 +25,8 @@ struct MockTransport {
     eof_on_read: bool,
     /// Last baud rate passed to `set_baud`.
     last_set_baud: Option<BaudRate>,
+    /// Number of times `flush()` was called.
+    flush_count: u32,
 }
 
 impl MockTransport {
@@ -36,6 +38,7 @@ impl MockTransport {
             closed: false,
             eof_on_read: false,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
@@ -47,6 +50,7 @@ impl MockTransport {
             closed: false,
             eof_on_read: false,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
@@ -59,11 +63,16 @@ impl MockTransport {
             closed: false,
             eof_on_read: true,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
     fn written_bytes(&self) -> &[u8] {
         &self.written
+    }
+
+    fn flush_count(&self) -> u32 {
+        self.flush_count
     }
 
     fn _push_read_data(&mut self, data: &[u8]) {
@@ -98,6 +107,7 @@ impl Transport for MockTransport {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.flush_count += 1;
         Ok(())
     }
 
@@ -1873,4 +1883,59 @@ fn set_leds_roomba400_debris_dock_bits() {
     let last4 = &written[written.len() - 4..];
     assert_eq!(last4[0], 139);
     assert_eq!(last4[1], 0b0010_1000, "Roomba400: debris=bit3, dock=bit5");
+}
+
+// ---------------------------------------------------------------------------
+// write_bytes / send_cmd flush discipline tests
+// ---------------------------------------------------------------------------
+
+/// Verify that query_sensor (request-response path) does not call flush().
+/// This documents the `write_bytes()` vs `send_cmd()` split: sensor queries
+/// must not incur the tcdrain latency of a flush.
+#[test]
+fn query_sensor_does_not_flush() {
+    // Packet 35 = OI mode = 1 byte.
+    let mock = MockTransport::with_read_data(&[3u8]);
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+    let flush_before = create.transport().flush_count();
+    let _ = create.query_sensor(35).unwrap();
+    assert_eq!(
+        create.transport().flush_count(),
+        flush_before,
+        "query_sensor must not call flush()"
+    );
+}
+
+/// Verify that query_list (request-response path) does not call flush().
+#[test]
+fn query_list_does_not_flush() {
+    // Packets 7 (bumps, 1 byte) + 35 (OI mode, 1 byte) = 2 bytes.
+    let mock = MockTransport::with_read_data(&[0u8, 3u8]);
+    let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
+    let flush_before = create.transport().flush_count();
+    let _ = create.query_list(&[7, 35]).unwrap();
+    assert_eq!(
+        create.transport().flush_count(),
+        flush_before,
+        "query_list must not call flush()"
+    );
+}
+
+/// Verify that a fire-and-forget command (drive) calls flush() via send_cmd().
+#[test]
+fn send_cmd_drive_calls_flush() {
+    let mock = MockTransport::new();
+    let mut create = Create::new(mock, RobotModel::Create2)
+        .start()
+        .unwrap()
+        .to_safe()
+        .unwrap();
+    let flush_before = create.transport().flush_count();
+    create
+        .drive(Velocity::new(0.1).unwrap(), Radius::STRAIGHT)
+        .unwrap();
+    assert!(
+        create.transport().flush_count() > flush_before,
+        "drive (send_cmd) must call flush()"
+    );
 }

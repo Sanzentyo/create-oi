@@ -22,6 +22,8 @@ struct MockAsyncTransport {
     eof_on_read: bool,
     /// Last baud rate passed to `set_baud`.
     last_set_baud: Option<BaudRate>,
+    /// Number of times `flush()` was called.
+    flush_count: u32,
 }
 
 impl MockAsyncTransport {
@@ -33,6 +35,7 @@ impl MockAsyncTransport {
             closed: false,
             eof_on_read: false,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
@@ -44,6 +47,7 @@ impl MockAsyncTransport {
             closed: false,
             eof_on_read: false,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
@@ -55,11 +59,16 @@ impl MockAsyncTransport {
             closed: false,
             eof_on_read: true,
             last_set_baud: None,
+            flush_count: 0,
         }
     }
 
     fn written_bytes(&self) -> &[u8] {
         &self.written
+    }
+
+    fn flush_count(&self) -> u32 {
+        self.flush_count
     }
 }
 
@@ -92,6 +101,7 @@ impl AsyncTransport for MockAsyncTransport {
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.flush_count += 1;
         Ok(())
     }
 
@@ -1622,5 +1632,67 @@ async fn async_set_leds_roomba400_uses_high_bits() {
     assert_eq!(
         last4[1], 0b0101_0000,
         "Roomba400: spot=bit6, check_robot=bit4"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// write_bytes / send_cmd flush discipline tests (async)
+// ---------------------------------------------------------------------------
+
+/// Verify that async query_sensor (request-response path) does not call flush().
+#[tokio::test]
+async fn async_query_sensor_does_not_flush() {
+    // Packet 35 = OI mode = 1 byte.
+    let mock = MockAsyncTransport::with_read_data(&[3u8]);
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+    let flush_before = create.transport().flush_count();
+    let _ = create.query_sensor(35).await.unwrap();
+    assert_eq!(
+        create.transport().flush_count(),
+        flush_before,
+        "async query_sensor must not call flush()"
+    );
+}
+
+/// Verify that async query_list (request-response path) does not call flush().
+#[tokio::test]
+async fn async_query_list_does_not_flush() {
+    // Packets 7 (bumps, 1 byte) + 35 (OI mode, 1 byte) = 2 bytes.
+    let mock = MockAsyncTransport::with_read_data(&[0u8, 3u8]);
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap();
+    let flush_before = create.transport().flush_count();
+    let _ = create.query_list(&[7, 35]).await.unwrap();
+    assert_eq!(
+        create.transport().flush_count(),
+        flush_before,
+        "async query_list must not call flush()"
+    );
+}
+
+/// Verify that a fire-and-forget command (drive) calls flush() via send_cmd().
+#[tokio::test]
+async fn async_send_cmd_drive_calls_flush() {
+    let mock = MockAsyncTransport::new();
+    let mut create = AsyncCreate::new(mock, RobotModel::Create2)
+        .start()
+        .await
+        .unwrap()
+        .to_safe()
+        .await
+        .unwrap();
+    let flush_before = create.transport().flush_count();
+    create
+        .drive(Velocity::new(0.1).unwrap(), Radius::STRAIGHT)
+        .await
+        .unwrap();
+    assert!(
+        create.transport().flush_count() > flush_before,
+        "async drive (send_cmd) must call flush()"
     );
 }
