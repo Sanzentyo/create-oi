@@ -79,6 +79,11 @@ impl AsyncTransport for SmolTransport {
     type Error = io::Error;
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        // Unblock enqueues bytes into its internal pipe and a background thread
+        // drains the pipe into NativePort::write() immediately.  For small
+        // serial commands (1–26 bytes), the background thread completes the OS
+        // write syscall long before the robot can respond, satisfying the
+        // AsyncTransport::write_all contract (read-after-write works without flush).
         self.writer.write_all(data).await
     }
 
@@ -120,13 +125,20 @@ impl AsyncTransport for SmolTransport {
 impl AsyncBaudConfigurable for SmolTransport {
     async fn set_baud(&mut self, rate: BaudRate) -> Result<(), io::Error> {
         use serialport::SerialPort;
-        // TTY settings (baud rate) are per-device: tcsetattr on either fd
-        // affects the device and is visible through both fds.
-        // Quiesce the reader first to stop any lingering background read task,
-        // then get exclusive access to the writer fd to reconfigure baud rate.
-        let _ = self.reader.get_mut().await;
-        let port = self.writer.get_mut().await;
-        port.set_baud_rate(rate.baud_u32())
+        let baud = rate.baud_u32();
+        // TTY baud settings are per-device (tcsetattr/ioctl affects all fds).
+        // We still call set_baud_rate() on both clones so that any per-object
+        // baud-rate cache (e.g. the macOS IOKit-specific field in TTYPort) stays
+        // in sync.  Quiesce the reader half first to stop any lingering read task.
+        self.reader
+            .get_mut()
+            .await
+            .set_baud_rate(baud)
+            .map_err(io::Error::other)?;
+        self.writer
+            .get_mut()
+            .await
+            .set_baud_rate(baud)
             .map_err(io::Error::other)
     }
 }

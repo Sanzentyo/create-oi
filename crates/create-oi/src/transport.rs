@@ -34,6 +34,14 @@ pub trait AsyncTransport: fmt::Debug {
     type Error: fmt::Debug + fmt::Display;
 
     /// Write all bytes to the transport.
+    ///
+    /// Implementations MUST begin forwarding bytes to the physical medium
+    /// immediately, without requiring an explicit [`flush`](AsyncTransport::flush).
+    /// A subsequent [`read`](AsyncTransport::read) call MUST be able to receive
+    /// a response based on the written bytes.  Implementations MUST NOT buffer
+    /// writes indefinitely; `flush()` may be used to drain hardware transmit
+    /// buffers (e.g. `tcdrain`), but it is not required for basic read-after-write
+    /// correctness.
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
@@ -68,6 +76,14 @@ pub trait AsyncTransport: fmt::Debug {
 #[cfg(feature = "std")]
 pub trait Transport: fmt::Debug + Send {
     /// Write all bytes to the transport.
+    ///
+    /// Implementations MUST begin forwarding bytes to the physical medium
+    /// immediately, without requiring an explicit [`flush`](Transport::flush).
+    /// A subsequent [`read`](Transport::read) call MUST be able to receive
+    /// a response based on the written bytes.  Implementations MUST NOT buffer
+    /// writes indefinitely; `flush()` may be used to drain hardware transmit
+    /// buffers (e.g. `tcdrain`), but it is not required for basic read-after-write
+    /// correctness.
     fn write_all(&mut self, data: &[u8]) -> std::io::Result<()>;
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
