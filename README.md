@@ -64,7 +64,68 @@ let mut robot = robot.to_safe().await.unwrap(); // Passive → Safe
 // robot.drive(Velocity::new(0.2)?, Radius::Straight).await?;
 ```
 
-## Build & Test
+## MIDI Playback
+
+The `midi` feature converts Standard MIDI Files (SMF) into iRobot OI song commands and plays them through the robot's built-in buzzer.
+
+### Enabling the feature
+
+```toml
+[dependencies]
+create-oi        = { version = "0.4", features = ["midi"] }
+create-oi-serial = { version = "0.4", features = ["midi"] }  # for the CLI example
+```
+
+### Running the bundled example
+
+```bash
+# Serial (sync) — plays the bundled CC0 game-over.mid
+cargo run -p create-oi-serial --example play_midi --features midi -- /dev/ttyUSB0
+
+# Async Tokio
+cargo run -p create-oi-tokio  --example play_midi --features midi -- /dev/ttyUSB0
+
+# Play a custom MIDI file with LED sync
+cargo run -p create-oi-serial --example play_midi --features midi -- \
+    /dev/ttyUSB0 song.mid --led-sync
+```
+
+### CLI options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--bpm <N>` | `-b` | Override tempo (beats per minute) |
+| `--channel <0-15>` | `-C` | Only play notes from one MIDI channel |
+| `--merge-tracks` | `-m` | Collapse multi-track files to a single monophonic voice |
+| `--voice <strategy>` | `-v` | Voice selection when merging: `highest` (default), `lowest`, `nearest`, `velocity` |
+| `--max-voices <N>` | `-p` | Limit simultaneous voices before monophonization |
+| `--no-rests` | | Skip silence gaps between notes |
+| `--keep-start-silence` | | Preserve leading silence |
+| `--keep-end-silence` | | Preserve trailing silence |
+| `--led-sync` | `-L` | Sync power LED color (pitch → green→red gradient) and digit display (note name) to playback |
+
+### Playback strategy (double-buffer)
+
+The OI allows at most 16 notes per song slot.  The implementation uses two slots (0 and 1) as a **double-buffer**: while one chunk is playing, the next is silently pre-loaded, reducing inter-chunk silence from ~22 ms down to the sensor poll round-trip (~2 ms).
+
+### Pitch range
+
+The robot speaker accepts MIDI notes 31–127 (G1 – G9).  Notes outside this range are clamped.
+
+### Using the API directly
+
+```rust
+use create_oi::midi::{MidiConfig, midi_initial_tempo, midi_to_notes, notes_to_chunks};
+
+let smf_bytes = std::fs::read("song.mid")?;
+let tempo = midi_initial_tempo(&smf_bytes)?;
+let config = MidiConfig::default();
+let notes = midi_to_notes(&smf_bytes, tempo, &config)?;
+let chunks: Vec<Vec<SongNote>> = notes_to_chunks(&notes);
+// then call robot.define_song() / robot.play_song() per chunk
+```
+
+
 
 ```bash
 just ci       # fmt-check + clippy + build + test
