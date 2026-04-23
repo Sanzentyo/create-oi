@@ -1,6 +1,6 @@
 //! # create-oi-embassy
 //!
-//! Embassy async transport adapter for the [`create-oi`] robot control library.
+//! Embassy async transport adapter for the `create-oi` robot control library.
 //!
 //! This crate provides two adapters:
 //!

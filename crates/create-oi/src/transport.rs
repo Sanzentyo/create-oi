@@ -38,6 +38,10 @@ pub trait AsyncTransport: fmt::Debug {
 
     /// Read available bytes into `buf`. Returns the number of bytes read.
     /// Must return at least 1 byte on success (0 indicates EOF/disconnect).
+    ///
+    /// Implementations **must not** propagate transport-internal idle timeouts
+    /// (e.g. OS-level serial read timeouts) as errors; those should be retried
+    /// transparently. Only genuine I/O errors should be returned.
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error>;
 
     /// Flush the output buffer, ensuring all written bytes are sent.

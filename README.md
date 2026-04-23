@@ -22,13 +22,13 @@ https://www.midishow.com/en/midi/211734.html
 
 | Crate | Description |
 |-------|-------------|
-| [`create-oi-protocol`](crates/create-oi-protocol) | Sans-IO wire protocol (opcodes, commands, sensors, stream parser) |
-| [`create-oi`](crates/create-oi) | TypeState control API + transport traits |
-| [`create-oi-serial`](crates/create-oi-serial) | Sync serial transport (`serialport`) |
-| [`create-oi-tokio`](crates/create-oi-tokio) | Async serial transport (Tokio) |
-| [`create-oi-embassy`](crates/create-oi-embassy) | Async embedded transport (Embassy) |
-| [`create-oi-smol`](crates/create-oi-smol) | Async serial transport (Smol) |
-| [`create-oi-dora`](crates/create-oi-dora) | dora-rs dataflow integration |
+| [`create-oi-protocol`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-protocol) | Sans-IO wire protocol (opcodes, commands, sensors, stream parser) |
+| [`create-oi`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi) | TypeState control API + transport traits |
+| [`create-oi-serial`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-serial) | Sync serial transport (`serialport`) |
+| [`create-oi-tokio`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-tokio) | Async serial transport (Tokio) |
+| [`create-oi-embassy`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-embassy) | Async embedded transport (Embassy) |
+| [`create-oi-smol`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-smol) | Async serial transport (Smol) |
+| [`create-oi-dora`](https://github.com/Sanzentyo/create-oi/tree/master/crates/create-oi-dora) | dora-rs dataflow integration |
 
 ## Feature Flags
 
@@ -48,8 +48,8 @@ Embassy users: `create-oi = { version = "0.4", default-features = false }`
 use create_oi::prelude::*;
 use create_oi_serial::SerialTransport;
 
-let transport = SerialTransport::open("/dev/ttyUSB0", CreateRobotModel::Create2)?;
-let robot = Create::new(transport, CreateRobotModel::Create2);
+let transport = SerialTransport::open("/dev/ttyUSB0", RobotModel::Create2)?;
+let robot = Create::new(transport, RobotModel::Create2);
 let robot = robot.start()?;          // Off → Passive
 let robot = robot.to_safe()?;        // Passive → Safe
 // robot.drive(Velocity::new(0.2)?, Radius::Straight)?;
@@ -63,7 +63,7 @@ use create_oi_embassy::EmbassyTransport;
 
 // uart: embassy_stm32::usart::Uart<'_, Async> configured at 115200 baud
 let transport = EmbassyTransport::new(uart);
-let robot = AsyncCreate::new(transport, CreateRobotModel::Create2);
+let robot = AsyncCreate::new(transport, RobotModel::Create2);
 let robot = robot.start().await.unwrap();   // Off → Passive
 let mut robot = robot.to_safe().await.unwrap(); // Passive → Safe
 // robot.drive(Velocity::new(0.2)?, Radius::Straight).await?;
@@ -132,13 +132,15 @@ let chunks: Vec<Vec<SongNote>> = notes_to_chunks(&notes);
 
 
 
+## Development
+
 ```bash
 just ci       # fmt-check + clippy + build + test
 just check    # fast workspace check
 just doc      # generate docs
 ```
 
-See [`docs/verification.md`](docs/verification.md) for detailed verification instructions.
+See [`docs/verification.md`](https://github.com/Sanzentyo/create-oi/blob/master/docs/verification.md) for detailed verification instructions.
 
 ## Supported Robots
 

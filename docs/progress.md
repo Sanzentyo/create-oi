@@ -1258,3 +1258,65 @@ After all chunks finish, `--led-sync` clears both outputs before `to_passive()`:
 - `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
 - `cargo fmt --all`: clean
 - `just check-nostd`: all 4 no_std / embedded builds pass
+
+## Round 32 — smol cross-platform + cargo-deny
+
+**Issues addressed:**
+
+1. **`create-oi-smol` cross-platform** — Removed `#![cfg(unix)]` guard.  Added platform type alias:
+   - `#[cfg(unix)] use serialport::TTYPort as NativePort`
+   - `#[cfg(windows)] use serialport::COMPort as NativePort`
+   - Both implement `Read + Write + Send`; `Unblock<NativePort>` compiles on both platforms.
+   - `compile_error!` for unsupported platforms.
+   - Removed "experimental" from description and README.
+   - Bumped version 0.3.0 → 0.4.0.
+
+2. **License audit via cargo-deny** — Installed `cargo-deny`, generated `deny.toml` policy:
+   - Allow list, MPL-2.0 exception for `serialport`, 33 `skip` entries for duplicate crates.
+   - Added `just deny` recipe (`cargo deny check licenses bans`).
+   - All licenses OK; no GPL/LGPL/AGPL detected.
+
+## Round 33 — Publish readiness
+
+**Issues addressed:**
+
+1. **Blocking: workspace dep versions** — Added `version = "0.4.0"` to workspace internal deps:
+   - `create-oi-protocol` and `create-oi` now specify version in `[workspace.dependencies]`.
+   - `cargo publish --dry-run -p create-oi-protocol` passes.
+
+2. **README docs drift** — Fixed:
+   - `CreateRobotModel` → `RobotModel` (3 occurrences in workspace README)
+   - All `(crates/...)` relative links → absolute GitHub URLs (broken on crates.io)
+   - `(docs/verification.md)` → absolute GitHub URL
+   - Added `## Development` heading before the floating `just` commands block
+
+3. **Readme fields** — Added `readme = "..."` to all publishable crates:
+   - `create-oi`: `readme = "../../README.md"` (workspace README)
+   - `create-oi-protocol`, `create-oi-serial`, `create-oi-tokio`, `create-oi-embassy`, `create-oi-smol`: `readme = "README.md"` (per-crate)
+   - Created per-crate README.md for protocol, serial, tokio, embassy, smol.
+
+4. **docs.rs feature visibility** — Added `[package.metadata.docs.rs]` with `features = ["midi"]` to `create-oi` and `create-oi-smol`.
+
+5. **Embassy intra-doc link** — Fixed broken `[`create-oi`]` link in lib.rs doc comment.
+
+6. **CHANGELOG.md** — Created minimal first-release changelog at workspace root.
+
+7. **`create-oi-smol` publish** — Removed `publish = false`:
+   - First confirmed implementation correctness:
+   - **Bug fixed**: `SmolTransport::read()` was leaking OS-level 100ms serialport read timeouts
+     as `io::ErrorKind::TimedOut` errors to callers.  Added retry loop to hide transport-internal
+     timeouts, matching tokio transport semantics.
+   - **Explicit serial settings** — Added `.data_bits(Eight).parity(None).stop_bits(One).flow_control(None)`.
+   - **Trait contract** — `AsyncTransport::read()` doc updated: implementations must not surface
+     transport-internal idle timeouts as errors.
+
+8. **Publish order** — Correct sequence:
+   1. `create-oi-protocol`
+   2. `create-oi`
+   3. `create-oi-serial`, `create-oi-tokio`, `create-oi-embassy`, `create-oi-smol` (any order)
+
+**Verification:**
+- `cargo test --workspace --features midi`: all 363 tests passed
+- `cargo clippy --workspace --all-targets --features midi -- -D warnings`: clean
+- `cargo package --list --allow-dirty -p create-oi`: README.md included
+- `cargo publish --dry-run --allow-dirty -p create-oi-protocol`: passes

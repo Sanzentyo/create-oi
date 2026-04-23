@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Sans-IO wire protocol for the iRobot Create/Roomba Open Interface — encoding, decoding, and stream framing"
 keywords = ["irobot", "create", "roomba", "protocol", "sans-io"]
 categories = ["embedded", "no-std::no-alloc"]
+readme = "README.md"
 
 [features]
 default = ["std"]

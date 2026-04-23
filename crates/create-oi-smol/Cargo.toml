@@ -8,7 +8,10 @@ rust-version.workspace = true
 description = "Smol async transport for create-oi (iRobot Create/Roomba)"
 keywords = ["irobot", "create", "roomba", "smol", "async"]
 categories = ["hardware-support", "asynchronous"]
-publish = false  # stub — not ready for crates.io
+readme = "README.md"
+
+[package.metadata.docs.rs]
+features = ["midi"]
 
 [dependencies]
 create-oi = { workspace = true, features = ["std"] }

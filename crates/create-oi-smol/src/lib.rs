@@ -51,7 +51,12 @@ impl SmolTransport {
 
     /// Open a serial port with a custom baud rate.
     pub fn open_with_baud(path: &str, baud: u32) -> io::Result<Self> {
+        use serialport::{DataBits, FlowControl, Parity, StopBits};
         let port = serialport::new(path, baud)
+            .data_bits(DataBits::Eight)
+            .parity(Parity::None)
+            .stop_bits(StopBits::One)
+            .flow_control(FlowControl::None)
             .timeout(Duration::from_millis(100))
             .open_native()
             .map_err(io::Error::other)?;
@@ -69,7 +74,20 @@ impl AsyncTransport for SmolTransport {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.port.read(buf).await
+        // `serialport` fires `TimedOut` / `WouldBlock` when the 100 ms OS-level
+        // read timeout elapses with no data.  These are transport-internal
+        // events and must not surface as errors to callers: retry silently until
+        // real data (or a genuine error) arrives.
+        loop {
+            match self.port.read(buf).await {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) => {}
+                result => return result,
+            }
+        }
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {

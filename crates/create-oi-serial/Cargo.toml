@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Synchronous serial transport for create-oi (iRobot Create/Roomba)"
 keywords = ["irobot", "create", "roomba", "serial"]
 categories = ["hardware-support"]
+readme = "README.md"
 
 [dependencies]
 create-oi = { workspace = true, features = ["std"] }

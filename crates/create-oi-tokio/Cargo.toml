@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Tokio async transport for create-oi (iRobot Create/Roomba)"
 keywords = ["irobot", "create", "roomba", "tokio", "async"]
 categories = ["hardware-support", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 create-oi = { workspace = true, features = ["std"] }

@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Embassy async transport adapter for create-oi (embedded UART)"
 keywords = ["irobot", "create", "embassy", "embedded", "no_std"]
 categories = ["hardware-support", "embedded", "no-std"]
+readme = "README.md"
 
 [dependencies]
 create-oi = { workspace = true, default-features = false }

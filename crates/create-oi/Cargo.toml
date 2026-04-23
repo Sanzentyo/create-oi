@@ -8,6 +8,10 @@ rust-version.workspace = true
 description = "iRobot Create/Roomba Open Interface — TypeState robot API with transport abstraction"
 keywords = ["irobot", "create", "roomba", "robot", "protocol"]
 categories = ["hardware-support", "embedded"]
+readme = "../../README.md"
+
+[package.metadata.docs.rs]
+features = ["midi"]
 
 [features]
 default = ["std"]
