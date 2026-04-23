@@ -1350,3 +1350,59 @@ After all chunks finish, `--led-sync` clears both outputs before `to_passive()`:
 #### Tests
 - 23 new unit tests across both files covering all new methods
 - Total test count increased from 363 to 380
+
+---
+
+## Round 34b — Remove `is_stasis_detected`
+
+**Commit:** c068454
+
+- Removed the deprecated `is_stasis_detected()` function from `SensorData` (never released, name was misleading)
+- Removed associated test
+- Test count unchanged at 380
+
+---
+
+## Round 35 — Fix SmolTransport flush crash + add --max-chunks
+
+**Commit:** 8dfc0df
+
+### Bug Fix: `SmolTransport::flush()` crash on macOS
+
+**Root cause:** `SmolTransport::flush()` called `Unblock<NativePort>::flush()` which
+eventually calls `tcdrain()` on the underlying file descriptor. On macOS with USB serial
+adapters, the serialport crate maps repeated `EINTR` retries in `tcdrain` to `io::ErrorKind::TimedOut`.
+This error was not retried (unlike `read()` which has a retry loop), causing `send_cmd()` to fail.
+
+- During `query_sensor`: flush failure was caught as a warning (non-fatal) — 3 warnings before the crash
+- During `play_song` / `define_song`: flush failure propagated via `?` → fatal crash
+
+**Why a no-op would be wrong:** `Unblock` has an 8 MB internal write pipe and a
+background writer thread. A no-op `flush()` would return before bytes even reach
+`NativePort`, which could break the `baud()` command sequence (sends BAUD command then
+switches baud after 100 ms delay — must complete before delay starts).
+
+**Fix:** Call `flush()` (to drain Unblock's internal pipe), but suppress `TimedOut` at
+the end (from `tcdrain`). Bytes are in the kernel TX buffer at this point, so the
+spurious timeout is safe to discard.
+
+```rust
+match self.port.flush().await {
+    Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(()),
+    other => other,
+}
+```
+
+### New Feature: `--max-chunks` / `-n` option in play_midi
+
+Added to all three `play_midi` examples (serial, smol, tokio):
+- `--max-chunks N` / `-n N` — stops playback after N chunks (useful for debugging long files)
+- Uses `Vec::truncate()` after `notes_to_chunks()` for a clean, zero-overhead implementation
+
+### Clippy cleanup
+
+- Fixed `field_reassign_with_default` warnings in `sensor.rs` tests — replaced
+  `let mut sd = SensorData::default(); sd.x = ...; sd.y = ...;` patterns with
+  `SensorData { x: ..., y: ..., ..Default::default() }` struct literals
+
+**Verification:** 380 tests pass, clippy clean
