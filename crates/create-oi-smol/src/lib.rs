@@ -70,7 +70,22 @@ impl AsyncTransport for SmolTransport {
     type Error = io::Error;
 
     async fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        self.port.write_all(data).await
+        // Before starting a new write, Unblock must stop any lingering read task.
+        // That task is blocked in NativePort::read() with a 100 ms OS timeout;
+        // when poll_stop drops the reader-side pipe, the task eventually times out
+        // and returns Err(TimedOut), which propagates through write_all().
+        // State is already reset to Idle at that point (no bytes were written),
+        // so retrying the whole write is safe and correct.
+        loop {
+            match self.port.write_all(data).await {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) => {}
+                result => return result,
+            }
+        }
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
