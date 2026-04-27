@@ -238,7 +238,7 @@ fn query_single_sensor() {
     let create = Create::new(mock, RobotModel::Create2);
     let mut create = create.start().unwrap();
 
-    let sd = create.query_sensor(35).unwrap();
+    let sd = create.query_sensor(PacketId::OI_MODE).unwrap();
     assert_eq!(sd.oi_mode, Some(OiMode::Safe));
 
     // Verify query command was sent: START(128) + SENSORS(142) + packet_id(35)
@@ -253,7 +253,9 @@ fn query_list_multiple_sensors() {
     let create = Create::new(mock, RobotModel::Create2);
     let mut create = create.start().unwrap();
 
-    let sd = create.query_list(&[8, 22]).unwrap();
+    let sd = create
+        .query_list(&[PacketId::WALL, PacketId::VOLTAGE])
+        .unwrap();
     assert_eq!(sd.wall, Some(true));
     assert_eq!(sd.voltage, Some(12500));
 }
@@ -442,7 +444,9 @@ fn start_stream_unsupported_model_rejects_before_send() {
     let mut create = create.start().unwrap().to_safe().unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    let err = create.start_stream(&[8, 22]).unwrap_err();
+    let err = create
+        .start_stream(&[PacketId::WALL, PacketId::VOLTAGE])
+        .unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
@@ -479,7 +483,9 @@ fn query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
     let bytes_before = create.transport().written_bytes().len();
 
     let mut buf = [0u8; 32];
-    let err = create.query_sensor_raw_into(0xFF, &mut buf).unwrap_err();
+    let err = create
+        .query_sensor_raw_into(PacketId::new(0xFF), &mut buf)
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -503,7 +509,7 @@ fn poll_stream_eof_returns_disconnected() {
     let mut create = create.start().unwrap();
 
     // Must start a stream before poll_stream is callable
-    create.start_stream(&[8]).unwrap(); // write succeeds even with eof_on_read
+    create.start_stream(&[PacketId::WALL]).unwrap(); // write succeeds even with eof_on_read
     let err = create.poll_stream().unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Disconnected),
@@ -655,7 +661,7 @@ fn start_stream_payload_overflow_rejects_before_send() {
 
     // Packet 8 (wall sensor) has 1 data byte → each entry costs 2 bytes in stream payload.
     // 128 × 2 = 256 > 255, so this should be rejected.
-    let ids: Vec<u8> = vec![8u8; 128];
+    let ids: Vec<PacketId> = vec![PacketId::WALL; 128];
     let err = create.start_stream(&ids).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
@@ -675,9 +681,9 @@ fn query_sensor_raw_rejects_while_streaming() {
     let mut create = create.start().unwrap().to_safe().unwrap();
 
     // Packet 8 (wall) costs 2 bytes per cycle; use 1 → 2 bytes, well under 255
-    create.start_stream(&[8u8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
 
-    let err = create.query_sensor_raw(8).unwrap_err();
+    let err = create.query_sensor_raw(PacketId::WALL).unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError while streaming, got {err:?}"
@@ -690,12 +696,12 @@ fn query_resumes_after_toggle_stream_false() {
     let create = Create::new(mock, RobotModel::Create2);
     let mut create = create.start().unwrap().to_safe().unwrap();
 
-    create.start_stream(&[8u8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
     create.toggle_stream(false).unwrap();
 
     // After disabling the stream, sensor queries should be accepted again.
     // (The mock just records the write; we only verify no ValidationError is raised.)
-    let result = create.query_sensor_raw(8);
+    let result = create.query_sensor_raw(PacketId::WALL);
     // Will error with Protocol::InsufficientData because mock has no read bytes loaded,
     // but NOT with ValidationError.
     assert!(
@@ -970,13 +976,13 @@ fn power_off_clears_streaming_state() {
     let mut create = create.start().unwrap();
 
     // Start a stream first
-    create.start_stream(&[8u8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
     // After power_off(), the Off handle must have streaming=false
     let off = create.power_off().unwrap();
     // Call start() to get an interactive handle; the new Passive handle inherits Off's cleared state
     let mut passive = off.start().unwrap();
     // query_sensor_raw should NOT return a streaming ValidationError
-    let result = passive.query_sensor_raw(8);
+    let result = passive.query_sensor_raw(PacketId::WALL);
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "power_off should have cleared streaming state, got ValidationError"
@@ -1090,7 +1096,7 @@ fn start_stream_rejects_unknown_packet_id_before_send() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.start_stream(&[8, 99, 22]); // 99 is not a valid packet ID
+    let result = robot.start_stream(&[PacketId::WALL, PacketId::new(99), PacketId::VOLTAGE]); // 99 is not a valid packet ID
     assert!(result.is_err(), "should reject unknown packet ID 99");
     let written_after = robot.transport().written_bytes().to_vec();
     assert_eq!(
@@ -1109,7 +1115,7 @@ fn start_stream_accepts_group_packet_id() {
         .unwrap();
 
     // Group 0 covers packets 7-26; payload fits within 255 bytes
-    let result = robot.start_stream(&[0]);
+    let result = robot.start_stream(&[PacketId::GROUP_0]);
     assert!(
         result.is_ok(),
         "group packet ID 0 should be accepted; got {result:?}"
@@ -1129,7 +1135,7 @@ fn start_stream_accepts_valid_packet_ids() {
         .to_safe()
         .unwrap();
 
-    let result = robot.start_stream(&[8, 22, 19]); // wall, voltage, distance — all valid
+    let result = robot.start_stream(&[PacketId::WALL, PacketId::VOLTAGE, PacketId::DISTANCE]); // wall, voltage, distance — all valid
     assert!(result.is_ok(), "should accept valid packet IDs");
     assert!(
         robot.transport().written_bytes().contains(&148),
@@ -1273,7 +1279,8 @@ fn seek_dock_available_in_full_mode() {
 #[test]
 fn query_sensor_raw_with_group_id_zero() {
     // Group 0 spans packets 7-26; get expected byte count from protocol
-    let group_len = create_oi::protocol::opcode::group_data_len(0).expect("group 0 must be known");
+    let group_len = create_oi::protocol::opcode::group_data_len(PacketId::GROUP_0)
+        .expect("group 0 must be known");
     let read_data = vec![0u8; group_len];
     let mock = MockTransport::with_read_data(&read_data);
     let mut create = Create::new(mock, RobotModel::Create2)
@@ -1282,7 +1289,7 @@ fn query_sensor_raw_with_group_id_zero() {
         .to_safe()
         .unwrap();
 
-    let result = create.query_sensor_raw(0);
+    let result = create.query_sensor_raw(PacketId::GROUP_0);
     assert!(
         result.is_ok(),
         "group ID 0 should be accepted, got {:?}",
@@ -1294,8 +1301,8 @@ fn query_sensor_raw_with_group_id_zero() {
 #[test]
 fn query_sensor_raw_into_with_group_id_100() {
     // Group 100 = all individual packets (52 packets); largest group
-    let group_len =
-        create_oi::protocol::opcode::group_data_len(100).expect("group 100 must be known");
+    let group_len = create_oi::protocol::opcode::group_data_len(PacketId::GROUP_100)
+        .expect("group 100 must be known");
     let read_data = vec![0u8; group_len];
     let mock = MockTransport::with_read_data(&read_data);
     let mut create = Create::new(mock, RobotModel::Create2)
@@ -1305,7 +1312,7 @@ fn query_sensor_raw_into_with_group_id_100() {
         .unwrap();
 
     let mut buf = vec![0u8; group_len];
-    let result = create.query_sensor_raw_into(100, &mut buf);
+    let result = create.query_sensor_raw_into(PacketId::GROUP_100, &mut buf);
     assert!(
         result.is_ok(),
         "group ID 100 should be accepted, got {:?}",
@@ -1324,7 +1331,7 @@ fn query_sensor_raw_still_rejects_truly_unknown_id() {
         .unwrap();
 
     // 101 is not a valid individual or group packet ID
-    let result = create.query_sensor_raw(101);
+    let result = create.query_sensor_raw(PacketId::GROUP_101);
     assert!(
         matches!(result, Err(create_oi::error::Error::Protocol(_))),
         "unknown ID 101 should return ProtocolError"
@@ -1425,7 +1432,7 @@ fn start_stream_rejects_duplicate_ids() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.start_stream(&[8, 22, 8]); // duplicate packet 8
+    let result = robot.start_stream(&[PacketId::WALL, PacketId::VOLTAGE, PacketId::WALL]); // duplicate packet 8
     assert!(result.is_err(), "should reject duplicate packet IDs");
     let written_after = robot.transport().written_bytes().to_vec();
     assert_eq!(
@@ -1444,7 +1451,11 @@ fn query_list_rejects_duplicate_ids() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.query_list(&[7, 8, 7]); // duplicate packet 7
+    let result = robot.query_list(&[
+        PacketId::BUMPS_AND_WHEEL_DROPS,
+        PacketId::WALL,
+        PacketId::BUMPS_AND_WHEEL_DROPS,
+    ]); // duplicate packet 7
     assert!(
         result.is_err(),
         "should reject duplicate packet IDs in query_list"
@@ -1686,7 +1697,7 @@ fn query_list_rejected_on_roomba400() {
         .unwrap()
         .to_safe()
         .unwrap();
-    let result = robot.query_list(&[0]);
+    let result = robot.query_list(&[PacketId::GROUP_0]);
     assert!(result.is_err(), "query_list must be rejected on Roomba 400");
     let err_msg = format!("{:?}", result.unwrap_err());
     assert!(
@@ -1705,7 +1716,7 @@ fn query_sensor_individual_packet_rejected_on_roomba400() {
         .to_safe()
         .unwrap();
     // Packet 7 is the first individual packet (bump/wheel drop, 1 byte).
-    let result = robot.query_sensor_raw(7);
+    let result = robot.query_sensor_raw(PacketId::BUMPS_AND_WHEEL_DROPS);
     assert!(
         result.is_err(),
         "individual sensor packets must be rejected on Roomba 400"
@@ -1721,7 +1732,7 @@ fn query_sensor_packet_43_rejected_on_create1() {
         .unwrap()
         .to_safe()
         .unwrap();
-    let result = robot.query_sensor_raw(43);
+    let result = robot.query_sensor_raw(PacketId::RIGHT_ENCODER_COUNTS);
     assert!(result.is_err(), "packet 43 must be rejected on Create 1");
 }
 
@@ -1734,7 +1745,7 @@ fn query_sensor_group_100_rejected_on_create1() {
         .unwrap()
         .to_safe()
         .unwrap();
-    let result = robot.query_sensor_raw(100);
+    let result = robot.query_sensor_raw(PacketId::GROUP_100);
     assert!(result.is_err(), "group 100 must be rejected on Create 1");
 }
 
@@ -1748,7 +1759,7 @@ fn query_sensor_group_0_accepted_on_roomba400() {
         .unwrap()
         .to_safe()
         .unwrap();
-    let result = robot.query_sensor_raw(0);
+    let result = robot.query_sensor_raw(PacketId::GROUP_0);
     assert!(
         result.is_ok(),
         "group 0 must be accepted on Roomba 400; got {result:?}"
@@ -1893,7 +1904,7 @@ fn query_sensor_does_not_flush() {
     let mock = MockTransport::with_read_data(&[3u8]);
     let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
     let flush_before = create.transport().flush_count();
-    let _ = create.query_sensor(35).unwrap();
+    let _ = create.query_sensor(PacketId::OI_MODE).unwrap();
     assert_eq!(
         create.transport().flush_count(),
         flush_before,
@@ -1908,7 +1919,9 @@ fn query_list_does_not_flush() {
     let mock = MockTransport::with_read_data(&[0u8, 3u8]);
     let mut create = Create::new(mock, RobotModel::Create2).start().unwrap();
     let flush_before = create.transport().flush_count();
-    let _ = create.query_list(&[7, 35]).unwrap();
+    let _ = create
+        .query_list(&[PacketId::BUMPS_AND_WHEEL_DROPS, PacketId::OI_MODE])
+        .unwrap();
     assert_eq!(
         create.transport().flush_count(),
         flush_before,
@@ -1946,8 +1959,8 @@ fn start_stream_rejects_when_already_streaming() {
         .unwrap()
         .to_safe()
         .unwrap();
-    create.start_stream(&[8]).unwrap();
-    let result = create.start_stream(&[22]);
+    create.start_stream(&[PacketId::WALL]).unwrap();
+    let result = create.start_stream(&[PacketId::VOLTAGE]);
     assert!(
         result.is_err(),
         "start_stream should return Err when already streaming"
@@ -1972,11 +1985,11 @@ fn toggle_stream_false_clears_streaming_flag() {
         .unwrap()
         .to_safe()
         .unwrap();
-    create.start_stream(&[8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
     create.toggle_stream(false).unwrap();
     // After pausing, sensor queries should not return ValidationError.
     // (Mock has no read bytes; we accept Protocol::InsufficientData but not Validation.)
-    let result = create.query_sensor_raw(8);
+    let result = create.query_sensor_raw(PacketId::WALL);
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should not return ValidationError after toggle_stream(false)"
@@ -1992,9 +2005,9 @@ fn pause_stream_clears_streaming_flag() {
         .unwrap()
         .to_safe()
         .unwrap();
-    create.start_stream(&[8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
     create.pause_stream().unwrap();
-    let result = create.query_sensor_raw(8);
+    let result = create.query_sensor_raw(PacketId::WALL);
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should not return ValidationError after pause_stream()"
@@ -2010,11 +2023,11 @@ fn resume_stream_sets_streaming_flag() {
         .unwrap()
         .to_safe()
         .unwrap();
-    create.start_stream(&[8]).unwrap();
+    create.start_stream(&[PacketId::WALL]).unwrap();
     create.pause_stream().unwrap();
     create.resume_stream().unwrap();
     // Now streaming again — query_sensor_raw must return ValidationError.
-    let result = create.query_sensor_raw(8);
+    let result = create.query_sensor_raw(PacketId::WALL);
     assert!(
         matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should return ValidationError while streaming after resume_stream()"
@@ -2031,10 +2044,10 @@ fn failed_start_stream_does_not_change_state() {
         .to_safe()
         .unwrap();
     // 99 is not a valid packet ID.
-    let result = create.start_stream(&[99]);
+    let result = create.start_stream(&[PacketId::new(99)]);
     assert!(result.is_err(), "should reject unknown packet ID");
     // streaming should still be false; sensor query should not return ValidationError.
-    let result = create.query_sensor_raw(8);
+    let result = create.query_sensor_raw(PacketId::WALL);
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "streaming state must remain false after a failed start_stream"
@@ -2051,7 +2064,7 @@ fn validate_packet_id_canonical_messages() {
         let mock = MockTransport::new();
         let mut create = Create::new(mock, RobotModel::Roomba400).start().unwrap();
         let mut buf = [0u8; 64];
-        let result = create.query_sensor_raw_into(4, &mut buf);
+        let result = create.query_sensor_raw_into(PacketId::GROUP_4, &mut buf);
         if let Err(Error::Validation(ve)) = result {
             assert_eq!(
                 ve.reason, "sensor group packet is not supported by this robot model",
@@ -2064,7 +2077,7 @@ fn validate_packet_id_canonical_messages() {
     {
         let mock = MockTransport::new();
         let mut create = Create::new(mock, RobotModel::Roomba400).start().unwrap();
-        let result = create.query_sensor_raw(8);
+        let result = create.query_sensor_raw(PacketId::WALL);
         if let Err(Error::Validation(ve)) = result {
             assert_eq!(
                 ve.reason,

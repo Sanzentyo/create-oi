@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut create = create.to_safe().map_err(|e| e.source)?;
 
     // Query battery voltage
-    let sd = create.query_list(&[22])?;
+    let sd = create.query_list(&[PacketId::VOLTAGE])?;
     println!("Battery voltage: {:?} mV", sd.voltage);
 
     // Drive forward at 200 mm/s straight

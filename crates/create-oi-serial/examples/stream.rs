@@ -32,11 +32,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut create = create.to_safe().map_err(|e| e.source)?;
 
     // Subscribe to three sensor packets:
-    //   7  = Bumps and wheel drops
-    //  22  = Battery voltage (mV)
-    //  35  = OI mode
-    println!("Starting sensor stream (packets 7, 22, 35)...");
-    create.start_stream(&[7, 22, 35])?;
+    //   PacketId::BUMPS_AND_WHEEL_DROPS
+    //   PacketId::VOLTAGE
+    //   PacketId::OI_MODE
+    println!("Starting sensor stream (BUMPS_AND_WHEEL_DROPS, VOLTAGE, OI_MODE)...");
+    create.start_stream(&[
+        PacketId::BUMPS_AND_WHEEL_DROPS,
+        PacketId::VOLTAGE,
+        PacketId::OI_MODE,
+    ])?;
 
     let mut frames = 0u32;
     let mut paused = false;

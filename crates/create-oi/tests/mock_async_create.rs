@@ -230,7 +230,7 @@ async fn async_query_single_sensor() {
     let create = AsyncCreate::new(mock, RobotModel::Create2);
     let mut create = create.start().await.unwrap();
 
-    let sd = create.query_sensor(35).await.unwrap();
+    let sd = create.query_sensor(PacketId::OI_MODE).await.unwrap();
     assert_eq!(sd.oi_mode, Some(OiMode::Safe));
 
     // Verify: START(128) + SENSORS(142) + packet_id(35)
@@ -245,7 +245,10 @@ async fn async_query_list_multiple_sensors() {
     let create = AsyncCreate::new(mock, RobotModel::Create2);
     let mut create = create.start().await.unwrap();
 
-    let sd = create.query_list(&[8, 22]).await.unwrap();
+    let sd = create
+        .query_list(&[PacketId::WALL, PacketId::VOLTAGE])
+        .await
+        .unwrap();
     assert_eq!(sd.wall, Some(true));
     assert_eq!(sd.voltage, Some(12500));
 }
@@ -415,7 +418,7 @@ async fn async_query_list_too_many_ids_rejects_before_send() {
     let bytes_before = create.transport().written_bytes().len();
 
     // 256 IDs exceeds the OI protocol maximum of 255.
-    let ids = vec![8u8; 256];
+    let ids = vec![PacketId::WALL; 256];
     let _err = create.query_list(&ids).await.unwrap_err();
     // Error may be Protocol(TooManyItems) — what matters is that it is rejected
     // and nothing was sent.
@@ -430,7 +433,7 @@ async fn async_start_stream_too_many_ids_rejects_before_send() {
     let bytes_before = create.transport().written_bytes().len();
 
     // 128 copies of packet 8 (wall, 1-byte) → 128 × (1+1) = 256 bytes per cycle > 255.
-    let ids = vec![8u8; 128];
+    let ids: Vec<PacketId> = vec![PacketId::WALL; 128];
     let err = create.start_stream(&ids).await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
@@ -446,7 +449,10 @@ async fn async_start_stream_unsupported_model_rejects_before_send() {
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
     let bytes_before = create.transport().written_bytes().len();
 
-    let err = create.start_stream(&[8, 22]).await.unwrap_err();
+    let err = create
+        .start_stream(&[PacketId::WALL, PacketId::VOLTAGE])
+        .await
+        .unwrap_err();
     assert!(matches!(err, create_oi::error::Error::Validation(_)));
     assert_eq!(create.transport().written_bytes().len(), bytes_before);
 }
@@ -460,7 +466,7 @@ async fn async_query_sensor_raw_into_unknown_packet_id_rejects_before_send() {
 
     let mut buf = [0u8; 32];
     let err = create
-        .query_sensor_raw_into(0xFF, &mut buf)
+        .query_sensor_raw_into(PacketId::new(0xFF), &mut buf)
         .await
         .unwrap_err();
     assert!(
@@ -486,7 +492,7 @@ async fn async_poll_stream_eof_returns_disconnected() {
     let mut create = create.start().await.unwrap();
 
     // Must start a stream before poll_stream is callable
-    create.start_stream(&[8]).await.unwrap(); // write succeeds even with eof_on_read
+    create.start_stream(&[PacketId::WALL]).await.unwrap(); // write succeeds even with eof_on_read
     let err = create.poll_stream().await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Disconnected),
@@ -627,7 +633,7 @@ async fn async_start_stream_payload_overflow_rejects_before_send() {
 
     // Packet 8 (wall sensor) has 1 data byte → each entry costs 2 bytes.
     // 128 × 2 = 256 > 255, should be rejected.
-    let ids: Vec<u8> = vec![8u8; 128];
+    let ids: Vec<PacketId> = vec![PacketId::WALL; 128];
     let err = create.start_stream(&ids).await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
@@ -646,9 +652,9 @@ async fn async_query_sensor_raw_rejects_while_streaming() {
     let create = AsyncCreate::new(mock, RobotModel::Create2);
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
 
-    create.start_stream(&[8u8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
 
-    let err = create.query_sensor_raw(8).await.unwrap_err();
+    let err = create.query_sensor_raw(PacketId::WALL).await.unwrap_err();
     assert!(
         matches!(err, create_oi::error::Error::Validation(_)),
         "expected ValidationError while streaming, got {err:?}"
@@ -661,11 +667,11 @@ async fn async_query_resumes_after_toggle_stream_false() {
     let create = AsyncCreate::new(mock, RobotModel::Create2);
     let mut create = create.start().await.unwrap().to_safe().await.unwrap();
 
-    create.start_stream(&[8u8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
     create.toggle_stream(false).await.unwrap();
 
     // After disabling the stream, sensor queries should not raise ValidationError.
-    let result = create.query_sensor_raw(8).await;
+    let result = create.query_sensor_raw(PacketId::WALL).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "should not get ValidationError after disabling stream"
@@ -950,13 +956,13 @@ async fn async_power_off_clears_streaming_state() {
     let mut create = create.start().await.unwrap();
 
     // Start a stream first
-    create.start_stream(&[8u8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
     // After power_off(), the Off handle must have streaming=false
     let off = create.power_off().await.unwrap();
     // Call start() to get an interactive handle
     let mut passive = off.start().await.unwrap();
     // query_sensor_raw should NOT return a streaming ValidationError
-    let result = passive.query_sensor_raw(8).await;
+    let result = passive.query_sensor_raw(PacketId::WALL).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "power_off should have cleared streaming state, got ValidationError"
@@ -1070,7 +1076,9 @@ async fn start_stream_rejects_unknown_packet_id_before_send() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.start_stream(&[8, 99, 22]).await; // 99 is not a valid packet ID
+    let result = robot
+        .start_stream(&[PacketId::WALL, PacketId::new(99), PacketId::VOLTAGE])
+        .await; // 99 is not a valid packet ID
     assert!(result.is_err(), "should reject unknown packet ID 99");
     let written_after = robot.transport().written_bytes().to_vec();
     assert_eq!(
@@ -1091,7 +1099,7 @@ async fn start_stream_accepts_group_packet_id() {
         .unwrap();
 
     // Group 0 covers packets 7-26; payload fits within 255 bytes
-    let result = robot.start_stream(&[0]).await;
+    let result = robot.start_stream(&[PacketId::GROUP_0]).await;
     assert!(
         result.is_ok(),
         "group packet ID 0 should be accepted; got {result:?}"
@@ -1113,7 +1121,9 @@ async fn start_stream_accepts_valid_packet_ids() {
         .await
         .unwrap();
 
-    let result = robot.start_stream(&[8, 22, 19]).await; // wall, voltage, distance — all valid
+    let result = robot
+        .start_stream(&[PacketId::WALL, PacketId::VOLTAGE, PacketId::DISTANCE])
+        .await; // wall, voltage, distance — all valid
     assert!(result.is_ok(), "should accept valid packet IDs");
     assert!(
         robot.transport().written_bytes().contains(&148),
@@ -1257,7 +1267,8 @@ async fn async_seek_dock_available_in_full_mode() {
 
 #[tokio::test]
 async fn async_query_sensor_raw_with_group_id_zero() {
-    let group_len = create_oi::protocol::opcode::group_data_len(0).expect("group 0 must be known");
+    let group_len = create_oi::protocol::opcode::group_data_len(PacketId::GROUP_0)
+        .expect("group 0 must be known");
     let read_data = vec![0u8; group_len];
     let mock = MockAsyncTransport::with_read_data(&read_data);
     let mut create = AsyncCreate::new(mock, RobotModel::Create2)
@@ -1268,7 +1279,7 @@ async fn async_query_sensor_raw_with_group_id_zero() {
         .await
         .unwrap();
 
-    let result = create.query_sensor_raw(0).await;
+    let result = create.query_sensor_raw(PacketId::GROUP_0).await;
     assert!(
         result.is_ok(),
         "group ID 0 should be accepted, got {:?}",
@@ -1279,8 +1290,8 @@ async fn async_query_sensor_raw_with_group_id_zero() {
 
 #[tokio::test]
 async fn async_query_sensor_raw_into_with_group_id_100() {
-    let group_len =
-        create_oi::protocol::opcode::group_data_len(100).expect("group 100 must be known");
+    let group_len = create_oi::protocol::opcode::group_data_len(PacketId::GROUP_100)
+        .expect("group 100 must be known");
     let read_data = vec![0u8; group_len];
     let mock = MockAsyncTransport::with_read_data(&read_data);
     let mut create = AsyncCreate::new(mock, RobotModel::Create2)
@@ -1292,7 +1303,9 @@ async fn async_query_sensor_raw_into_with_group_id_100() {
         .unwrap();
 
     let mut buf = vec![0u8; group_len];
-    let result = create.query_sensor_raw_into(100, &mut buf).await;
+    let result = create
+        .query_sensor_raw_into(PacketId::GROUP_100, &mut buf)
+        .await;
     assert!(
         result.is_ok(),
         "group ID 100 should be accepted, got {:?}",
@@ -1312,7 +1325,7 @@ async fn async_query_sensor_raw_rejects_unknown_id() {
         .await
         .unwrap();
 
-    let result = create.query_sensor_raw(101).await;
+    let result = create.query_sensor_raw(PacketId::GROUP_101).await;
     assert!(
         matches!(result, Err(create_oi::error::Error::Protocol(_))),
         "unknown ID 101 should return ProtocolError"
@@ -1399,7 +1412,9 @@ async fn async_start_stream_rejects_duplicate_ids() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.start_stream(&[8, 22, 8]).await; // duplicate packet 8
+    let result = robot
+        .start_stream(&[PacketId::WALL, PacketId::VOLTAGE, PacketId::WALL])
+        .await; // duplicate packet 8
     assert!(result.is_err(), "should reject duplicate packet IDs");
     let written_after = robot.transport().written_bytes().to_vec();
     assert_eq!(
@@ -1420,7 +1435,13 @@ async fn async_query_list_rejects_duplicate_ids() {
         .unwrap();
 
     let written_before = robot.transport().written_bytes().to_vec();
-    let result = robot.query_list(&[7, 8, 7]).await; // duplicate packet 7
+    let result = robot
+        .query_list(&[
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+            PacketId::WALL,
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+        ])
+        .await; // duplicate packet 7
     assert!(
         result.is_err(),
         "should reject duplicate packet IDs in query_list"
@@ -1644,7 +1665,7 @@ async fn async_query_sensor_does_not_flush() {
         .await
         .unwrap();
     let flush_before = create.transport().flush_count();
-    let _ = create.query_sensor(35).await.unwrap();
+    let _ = create.query_sensor(PacketId::OI_MODE).await.unwrap();
     assert_eq!(
         create.transport().flush_count(),
         flush_before,
@@ -1662,7 +1683,10 @@ async fn async_query_list_does_not_flush() {
         .await
         .unwrap();
     let flush_before = create.transport().flush_count();
-    let _ = create.query_list(&[7, 35]).await.unwrap();
+    let _ = create
+        .query_list(&[PacketId::BUMPS_AND_WHEEL_DROPS, PacketId::OI_MODE])
+        .await
+        .unwrap();
     assert_eq!(
         create.transport().flush_count(),
         flush_before,
@@ -1705,8 +1729,8 @@ async fn async_start_stream_rejects_when_already_streaming() {
         .to_safe()
         .await
         .unwrap();
-    create.start_stream(&[8]).await.unwrap();
-    let result = create.start_stream(&[22]).await;
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
+    let result = create.start_stream(&[PacketId::VOLTAGE]).await;
     assert!(
         result.is_err(),
         "start_stream should return Err when already streaming"
@@ -1733,9 +1757,9 @@ async fn async_toggle_stream_false_clears_streaming_flag() {
         .to_safe()
         .await
         .unwrap();
-    create.start_stream(&[8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
     create.toggle_stream(false).await.unwrap();
-    let result = create.query_sensor_raw(8).await;
+    let result = create.query_sensor_raw(PacketId::WALL).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should not return ValidationError after toggle_stream(false)"
@@ -1753,9 +1777,9 @@ async fn async_pause_stream_clears_streaming_flag() {
         .to_safe()
         .await
         .unwrap();
-    create.start_stream(&[8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
     create.pause_stream().await.unwrap();
-    let result = create.query_sensor_raw(8).await;
+    let result = create.query_sensor_raw(PacketId::WALL).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should not return ValidationError after pause_stream()"
@@ -1773,10 +1797,10 @@ async fn async_resume_stream_sets_streaming_flag() {
         .to_safe()
         .await
         .unwrap();
-    create.start_stream(&[8]).await.unwrap();
+    create.start_stream(&[PacketId::WALL]).await.unwrap();
     create.pause_stream().await.unwrap();
     create.resume_stream().await.unwrap();
-    let result = create.query_sensor_raw(8).await;
+    let result = create.query_sensor_raw(PacketId::WALL).await;
     assert!(
         matches!(result, Err(create_oi::error::Error::Validation(_))),
         "query_sensor_raw should return ValidationError while streaming after resume_stream()"
@@ -1794,9 +1818,9 @@ async fn async_failed_start_stream_does_not_change_state() {
         .to_safe()
         .await
         .unwrap();
-    let result = create.start_stream(&[99]).await;
+    let result = create.start_stream(&[PacketId::new(99)]).await;
     assert!(result.is_err(), "should reject unknown packet ID");
-    let result = create.query_sensor_raw(8).await;
+    let result = create.query_sensor_raw(PacketId::WALL).await;
     assert!(
         !matches!(result, Err(create_oi::error::Error::Validation(_))),
         "streaming state must remain false after a failed start_stream"

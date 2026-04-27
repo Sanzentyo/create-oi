@@ -279,7 +279,7 @@ fn wait_for_chunk_end(
         );
 
         if now >= poll_start {
-            match create.query_sensor(37) {
+            match create.query_sensor(PacketId::SONG_PLAYING) {
                 Ok(sd) => {
                     let playing = sd.song_playing.unwrap_or(false);
                     saw_playing |= playing;

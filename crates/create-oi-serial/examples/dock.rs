@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Transitioning back to Safe reclaims control and aborts any ongoing
     // autonomous operation. We then query sensors before heading to dock.
     let mut create = create.to_safe().map_err(|e| e.source)?;
-    let sd = create.query_list(&[22])?;
+    let sd = create.query_list(&[PacketId::VOLTAGE])?;
     println!("Battery voltage: {:?} mV", sd.voltage);
 
     create.stop()?;

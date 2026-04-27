@@ -25,8 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let create = create.start().await.map_err(|e| e.source)?;
         let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
-        // Start sensor stream: bump/wheeldrop (7), voltage (22), OI mode (35)
-        create.start_stream(&[7, 22, 35]).await?;
+        // Start sensor stream: BUMPS_AND_WHEEL_DROPS, VOLTAGE, OI_MODE
+        create
+            .start_stream(&[
+                PacketId::BUMPS_AND_WHEEL_DROPS,
+                PacketId::VOLTAGE,
+                PacketId::OI_MODE,
+            ])
+            .await?;
 
         const MAX_FRAMES: u32 = 20;
         let mut frames = 0u32;

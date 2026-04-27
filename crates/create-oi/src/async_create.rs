@@ -23,6 +23,7 @@ use crate::types::{
 use core::marker::PhantomData;
 use core::time::Duration;
 use create_oi_protocol::command;
+use create_oi_protocol::opcode::PacketId;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
 use create_oi_protocol::types::{BaudRate, RadiusMm, VelocityMmPerSec};
@@ -338,7 +339,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     #[must_use = "query result must be used"]
     pub async fn query_sensor_raw_into(
         &mut self,
-        packet_id: u8,
+        packet_id: PacketId,
         buf: &mut [u8],
     ) -> Result<usize, Error<T::Error>> {
         self.reject_if_streaming()?;
@@ -347,7 +348,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
             .ok_or(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id.get()),
             ))?;
         if buf.len() < len {
             return Err(Error::Protocol(
@@ -368,14 +369,17 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Validates the packet ID before sending any bytes to the robot.
     #[cfg(feature = "alloc")]
     #[must_use = "query result must be used"]
-    pub async fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<T::Error>> {
+    pub async fn query_sensor_raw(
+        &mut self,
+        packet_id: PacketId,
+    ) -> Result<Vec<u8>, Error<T::Error>> {
         self.reject_if_streaming()?;
         self.validate_packet_id(packet_id)?;
         let len = create_oi_protocol::opcode::packet_info(packet_id)
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
             .ok_or(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id.get()),
             ))?;
         let mut buf = vec![0u8; len];
         self.write_bytes(&command::encode_sensors(packet_id))
@@ -386,10 +390,14 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
 
     /// Query a single sensor packet and decode it.
     ///
-    /// Group packet IDs (0-6, 100) are not supported by this typed decode API;
-    /// use `query_sensor_raw_into()` to receive raw bytes for group packets.
+    /// Group packet IDs (0–6, 100+) are not supported by this typed decode API;
+    /// use [`query_sensor_raw_into`](Self::query_sensor_raw_into) or
+    /// [`query_list_raw_into`](Self::query_list_raw_into) to receive raw bytes for group packets.
     #[must_use = "query result must be used"]
-    pub async fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<T::Error>> {
+    pub async fn query_sensor(
+        &mut self,
+        packet_id: PacketId,
+    ) -> Result<SensorData, Error<T::Error>> {
         if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
             return Err(Error::Validation(ValidationError {
                 field: "packet_id",
@@ -410,7 +418,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// if the list contains duplicate packet IDs, if the model does not support
     /// Query List (Roomba 400), or if a packet ID is not available on this model.
     ///
-    /// Group packet IDs (0-6, 100) are accepted; the robot expands them and
+    /// Group packet IDs (0–6, 100+) are accepted; the robot expands them and
     /// returns the constituent individual packets, which are then decoded.
     ///
     /// When the `alloc` feature is enabled this method accepts up to 255 IDs,
@@ -419,7 +427,10 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Group-100); passing more IDs returns a `ValidationError`.
     #[cfg(feature = "alloc")]
     #[must_use = "query result must be used"]
-    pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+    pub async fn query_list(
+        &mut self,
+        packet_ids: &[PacketId],
+    ) -> Result<SensorData, Error<T::Error>> {
         let expected_len = self.validate_query_list_common(packet_ids)?;
         let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
         self.write_bytes(&cmd).await?;
@@ -438,7 +449,10 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Enable the `alloc` feature to remove this limit.
     #[cfg(not(feature = "alloc"))]
     #[must_use = "query result must be used"]
-    pub async fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<T::Error>> {
+    pub async fn query_list(
+        &mut self,
+        packet_ids: &[PacketId],
+    ) -> Result<SensorData, Error<T::Error>> {
         let expected_len = self.validate_query_list_common(packet_ids)?;
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
@@ -460,10 +474,64 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
         Ok(sd)
     }
 
+    /// Query multiple sensor packets and return the raw concatenated bytes.
+    ///
+    /// Like [`query_list`](Self::query_list) but skips decoding — useful for
+    /// group packets or when you need the raw wire bytes.
+    #[cfg(feature = "alloc")]
+    #[must_use = "query result must be used"]
+    pub async fn query_list_raw(
+        &mut self,
+        packet_ids: &[PacketId],
+    ) -> Result<Vec<u8>, Error<T::Error>> {
+        let expected_len = self.validate_query_list_common(packet_ids)?;
+        let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
+        self.write_bytes(&cmd).await?;
+        let mut buf = vec![0u8; expected_len];
+        self.read_exact(&mut buf).await?;
+        Ok(buf)
+    }
+
+    /// Query multiple sensor packets into a caller-provided buffer (no-alloc).
+    ///
+    /// Like [`query_list_raw`](Self::query_list_raw) but writes into `out` instead
+    /// of allocating.  Returns the number of bytes written.
+    ///
+    /// Limited to at most 52 packet IDs without the `alloc` feature.
+    #[must_use = "query result must be used"]
+    pub async fn query_list_raw_into(
+        &mut self,
+        packet_ids: &[PacketId],
+        out: &mut [u8],
+    ) -> Result<usize, Error<T::Error>> {
+        let expected_len = self.validate_query_list_common(packet_ids)?;
+        const ASYNC_MAX_IDS: usize = 52;
+        if packet_ids.len() > ASYNC_MAX_IDS {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "async query_list_raw_into supports at most 52 packet IDs without alloc; enable the alloc feature for longer lists",
+            }));
+        }
+        if out.len() < expected_len {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::BufferTooSmall {
+                    need: expected_len,
+                    got: out.len(),
+                },
+            ));
+        }
+        const MAX_CMD: usize = 2 + ASYNC_MAX_IDS;
+        let mut cmd_buf = [0u8; MAX_CMD];
+        let cmd_len = command::encode_query_list_into(&mut cmd_buf, packet_ids)?;
+        self.write_bytes(&cmd_buf[..cmd_len]).await?;
+        self.read_exact(&mut out[..expected_len]).await?;
+        Ok(expected_len)
+    }
+
     /// Read the robot's current OI mode from sensor data.
     #[must_use = "query result must be used"]
     pub async fn read_oi_mode(&mut self) -> Result<OiMode, Error<T::Error>> {
-        let sd = self.query_sensor(35).await?;
+        let sd = self.query_sensor(PacketId::OI_MODE).await?;
         sd.oi_mode.ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::MissingSensorField { field: "oi_mode" },
         ))
@@ -483,7 +551,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Without `alloc` the implementation uses a fixed stack buffer limited
     /// to 52 IDs (the size of Group-100).
     #[cfg(feature = "alloc")]
-    pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+    pub async fn start_stream(&mut self, packet_ids: &[PacketId]) -> Result<(), Error<T::Error>> {
         self.validate_stream_init_params(packet_ids)?;
         let cmd = command::encode_stream(packet_ids).map_err(Error::Protocol)?;
         self.send_cmd(&cmd).await?;
@@ -497,7 +565,7 @@ impl<M: SensorReadable, T: AsyncTransport> AsyncCreate<M, T> {
     /// Uses a fixed stack buffer; limited to at most 52 packet IDs.
     /// Enable the `alloc` feature to remove this limit.
     #[cfg(not(feature = "alloc"))]
-    pub async fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+    pub async fn start_stream(&mut self, packet_ids: &[PacketId]) -> Result<(), Error<T::Error>> {
         self.validate_stream_init_params(packet_ids)?;
         const ASYNC_MAX_IDS: usize = 52;
         if packet_ids.len() > ASYNC_MAX_IDS {
@@ -1158,7 +1226,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// Checks: model supports streaming, no duplicate IDs, all IDs valid for this model,
     /// total per-cycle payload ≤ 255 bytes.  Returns `Ok(())` on success.
-    fn validate_stream_init_params(&self, packet_ids: &[u8]) -> Result<(), Error<T::Error>> {
+    fn validate_stream_init_params(&self, packet_ids: &[PacketId]) -> Result<(), Error<T::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
                 field: "stream",
@@ -1191,7 +1259,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
                         Ok(acc + members.len() + data_len)
                     } else {
                         Err(Error::Protocol(
-                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                            create_oi_protocol::error::ProtocolError::UnknownPacketId(id.get()),
                         ))
                     }
                 })?;
@@ -1208,7 +1276,10 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
     ///
     /// Checks: not currently streaming, model supports query_list, no duplicate IDs,
     /// all IDs valid for this model.  Returns the expected total response data length.
-    fn validate_query_list_common(&self, packet_ids: &[u8]) -> Result<usize, Error<T::Error>> {
+    fn validate_query_list_common(
+        &self,
+        packet_ids: &[PacketId],
+    ) -> Result<usize, Error<T::Error>> {
         self.reject_if_streaming()?;
         if !self.model.supports_query_list() {
             return Err(Error::Validation(ValidationError {
@@ -1248,10 +1319,10 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
         Ok(())
     }
 
-    fn validate_packet_id(&self, packet_id: u8) -> Result<(), Error<T::Error>> {
+    fn validate_packet_id(&self, packet_id: PacketId) -> Result<(), Error<T::Error>> {
         use create_oi_protocol::opcode;
         if opcode::group_data_len(packet_id).is_some() {
-            if !self.model.supports_group_packet(packet_id) {
+            if !self.model.supports_group_packet(packet_id.get()) {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
                     reason: "sensor group packet is not supported by this robot model",
@@ -1264,7 +1335,7 @@ impl<M: Mode, T: AsyncTransport> AsyncCreate<M, T> {
                     reason: "individual sensor packet IDs are not supported on Roomba 400; use group IDs 0–3",
                 }));
             }
-            if packet_id > self.model.max_individual_sensor_packet_id() {
+            if packet_id.get() > self.model.max_individual_sensor_packet_id() {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
                     reason: "sensor packet ID is not available on this robot model",

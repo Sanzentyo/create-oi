@@ -16,7 +16,7 @@
 use alloc::vec::Vec;
 
 use crate::error::ProtocolError;
-use crate::opcode::packet_info;
+use crate::opcode::{PacketId, packet_info};
 use crate::sensor::SensorData;
 
 /// Header byte that starts every stream frame.
@@ -157,7 +157,7 @@ impl<const N: usize> StreamParser<N> {
             let pkt_id = payload[offset];
             offset += 1;
 
-            let info = match packet_info(pkt_id) {
+            let info = match packet_info(PacketId::new(pkt_id)) {
                 Some(i) => i,
                 None => {
                     return Err(ProtocolError::UnknownPacketId(pkt_id));
@@ -170,7 +170,7 @@ impl<const N: usize> StreamParser<N> {
                     got: payload.len() - offset,
                 });
             }
-            sd.decode_packet(pkt_id, &payload[offset..offset + len])?;
+            sd.decode_packet(PacketId::new(pkt_id), &payload[offset..offset + len])?;
             offset += len;
         }
 

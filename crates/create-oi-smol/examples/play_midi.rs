@@ -298,7 +298,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if now >= poll_start {
-                    match create.query_sensor(37).await {
+                    match create.query_sensor(PacketId::SONG_PLAYING).await {
                         Ok(sd) => {
                             let playing = sd.song_playing.unwrap_or(false);
                             saw_playing |= playing;

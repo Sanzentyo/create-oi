@@ -41,6 +41,8 @@ pub mod sensor;
 pub mod stream;
 pub mod types;
 
+pub use opcode::PacketId;
+
 // ---------------------------------------------------------------------------
 // Protocol limits
 // ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ pub const MAX_PACKET_IDS: usize = 255;
 /// Convenience re-exports of commonly used protocol items.
 pub mod prelude {
     pub use crate::error::ProtocolError;
-    pub use crate::opcode::Opcode;
+    pub use crate::opcode::{Opcode, PacketId};
     pub use crate::sensor::SensorData;
     pub use crate::stream::StreamParser;
     pub use crate::types::{BaudRate, ChargingState, IrChar, OiMode};

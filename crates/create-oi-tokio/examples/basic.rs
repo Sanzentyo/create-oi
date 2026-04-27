@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
     // Query battery
-    let sd = create.query_list(&[22]).await?;
+    let sd = create.query_list(&[PacketId::VOLTAGE]).await?;
     println!("Battery voltage: {:?} mV", sd.voltage);
 
     // Drive forward

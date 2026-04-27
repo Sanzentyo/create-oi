@@ -36,7 +36,12 @@ fn main() -> Result<()> {
     // For now, demonstrate the polling pattern:
     loop {
         // Query common sensors
-        let sd = create.query_list(&[7, 8, 22, 24])?;
+        let sd = create.query_list(&[
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+            PacketId::WALL,
+            PacketId::VOLTAGE,
+            PacketId::TEMPERATURE,
+        ])?;
 
         eprintln!(
             "[sensors] bumps={:?} wall={:?} voltage={:?}mV temp={:?}°C",

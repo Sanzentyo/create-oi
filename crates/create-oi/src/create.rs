@@ -15,6 +15,7 @@ use crate::types::{
     PowerLedColor, Radius, RobotModel, SongNote, SongNumber, Velocity, led_bits,
 };
 use create_oi_protocol::command;
+use create_oi_protocol::opcode::PacketId;
 use create_oi_protocol::sensor::{self, SensorData};
 use create_oi_protocol::stream::StreamParser;
 use create_oi_protocol::types::{BaudRate, RadiusMm, VelocityMmPerSec};
@@ -316,14 +317,17 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// Returns `ValidationError` if a sensor stream is currently active;
     /// call `toggle_stream(false)` first to pause the stream.
     #[must_use = "query result must be used"]
-    pub fn query_sensor_raw(&mut self, packet_id: u8) -> Result<Vec<u8>, Error<std::io::Error>> {
+    pub fn query_sensor_raw(
+        &mut self,
+        packet_id: PacketId,
+    ) -> Result<Vec<u8>, Error<std::io::Error>> {
         self.reject_if_streaming()?;
         self.validate_packet_id(packet_id)?;
         let len = create_oi_protocol::opcode::packet_info(packet_id)
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
             .ok_or(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id.get()),
             ))?;
         let mut buf = vec![0u8; len];
         self.write_bytes(&command::encode_sensors(packet_id))?;
@@ -339,7 +343,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     #[must_use = "query result must be used"]
     pub fn query_sensor_raw_into(
         &mut self,
-        packet_id: u8,
+        packet_id: PacketId,
         buf: &mut [u8],
     ) -> Result<usize, Error<std::io::Error>> {
         self.reject_if_streaming()?;
@@ -348,7 +352,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
             .map(|p| p.len as usize)
             .or_else(|| create_oi_protocol::opcode::group_data_len(packet_id))
             .ok_or(Error::Protocol(
-                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id),
+                create_oi_protocol::error::ProtocolError::UnknownPacketId(packet_id.get()),
             ))?;
         if buf.len() < len {
             return Err(Error::Protocol(
@@ -365,10 +369,14 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
 
     /// Query a single sensor packet and decode it.
     ///
-    /// Group packet IDs (0-6, 100) are not supported by this typed decode API;
-    /// use `query_sensor_raw_into()` to receive raw bytes for group packets.
+    /// Group packet IDs (0–6, 100+) are not supported by this typed decode API;
+    /// use [`query_sensor_raw_into`](Self::query_sensor_raw_into) or
+    /// [`query_list_raw`](Self::query_list_raw) to receive raw bytes for group packets.
     #[must_use = "query result must be used"]
-    pub fn query_sensor(&mut self, packet_id: u8) -> Result<SensorData, Error<std::io::Error>> {
+    pub fn query_sensor(
+        &mut self,
+        packet_id: PacketId,
+    ) -> Result<SensorData, Error<std::io::Error>> {
         if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
             return Err(Error::Validation(ValidationError {
                 field: "packet_id",
@@ -388,10 +396,13 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// if the list contains duplicate packet IDs, if the model does not support
     /// Query List (Roomba 400), or if a packet ID is not available on this model.
     ///
-    /// Group packet IDs (0-6, 100) are accepted; the robot expands them and
+    /// Group packet IDs (0–6, 100+) are accepted; the robot expands them and
     /// returns the constituent individual packets, which are then decoded.
     #[must_use = "query result must be used"]
-    pub fn query_list(&mut self, packet_ids: &[u8]) -> Result<SensorData, Error<std::io::Error>> {
+    pub fn query_list(
+        &mut self,
+        packet_ids: &[PacketId],
+    ) -> Result<SensorData, Error<std::io::Error>> {
         self.reject_if_streaming()?;
         if !self.model.supports_query_list() {
             return Err(Error::Validation(ValidationError {
@@ -420,10 +431,90 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
         Ok(sd)
     }
 
+    /// Query multiple sensor packets and return the raw concatenated bytes.
+    ///
+    /// Like [`query_list`](Self::query_list) but skips decoding — useful for
+    /// group packets or when you need the raw wire bytes.
+    ///
+    /// Returns `ValidationError` if a sensor stream is currently active,
+    /// if the list contains duplicate packet IDs, or if a packet ID is invalid.
+    #[must_use = "query result must be used"]
+    pub fn query_list_raw(
+        &mut self,
+        packet_ids: &[PacketId],
+    ) -> Result<Vec<u8>, Error<std::io::Error>> {
+        self.reject_if_streaming()?;
+        if !self.model.supports_query_list() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
+            }));
+        }
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in query_list_raw",
+            }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
+        }
+        let expected_len = sensor::expected_data_len(packet_ids)?;
+        let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
+        self.write_bytes(&cmd)?;
+        let mut buf = vec![0u8; expected_len];
+        self.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Query multiple sensor packets into a caller-provided buffer.
+    ///
+    /// Like [`query_list_raw`](Self::query_list_raw) but writes into `out` instead
+    /// of allocating.  Returns the number of bytes written.
+    ///
+    /// Returns `ValidationError` if `out` is too small, a sensor stream is active,
+    /// the list contains duplicate IDs, or a packet ID is invalid.
+    #[must_use = "query result must be used"]
+    pub fn query_list_raw_into(
+        &mut self,
+        packet_ids: &[PacketId],
+        out: &mut [u8],
+    ) -> Result<usize, Error<std::io::Error>> {
+        self.reject_if_streaming()?;
+        if !self.model.supports_query_list() {
+            return Err(Error::Validation(ValidationError {
+                field: "model",
+                reason: "query_list (OPCODE 149) is not supported on Roomba 400; use query_sensor_raw with group IDs 0–3",
+            }));
+        }
+        if sensor::has_duplicate_ids(packet_ids) {
+            return Err(Error::Validation(ValidationError {
+                field: "packet_ids",
+                reason: "duplicate packet IDs are not allowed in query_list_raw_into",
+            }));
+        }
+        for &id in packet_ids {
+            self.validate_packet_id(id)?;
+        }
+        let expected_len = sensor::expected_data_len(packet_ids)?;
+        if out.len() < expected_len {
+            return Err(Error::Protocol(
+                create_oi_protocol::error::ProtocolError::BufferTooSmall {
+                    need: expected_len,
+                    got: out.len(),
+                },
+            ));
+        }
+        let cmd = command::encode_query_list(packet_ids).map_err(Error::Protocol)?;
+        self.write_bytes(&cmd)?;
+        self.read_exact(&mut out[..expected_len])?;
+        Ok(expected_len)
+    }
+
     /// Read the robot's current OI mode from sensor data.
     #[must_use = "query result must be used"]
     pub fn read_oi_mode(&mut self) -> Result<OiMode, Error<std::io::Error>> {
-        let sd = self.query_sensor(35)?;
+        let sd = self.query_sensor(PacketId::OI_MODE)?;
         sd.oi_mode.ok_or(Error::Protocol(
             create_oi_protocol::error::ProtocolError::MissingSensorField { field: "oi_mode" },
         ))
@@ -444,7 +535,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
     /// (`query_sensor_raw`, `query_sensor_raw_into`, `query_list`) return
     /// `ValidationError`. Call [`toggle_stream(false)`](Self::toggle_stream) or
     /// [`pause_stream`](Self::pause_stream) to pause the stream first.
-    pub fn start_stream(&mut self, packet_ids: &[u8]) -> Result<(), Error<std::io::Error>> {
+    pub fn start_stream(&mut self, packet_ids: &[PacketId]) -> Result<(), Error<std::io::Error>> {
         if !self.model.supports_stream() {
             return Err(Error::Validation(ValidationError {
                 field: "stream",
@@ -476,7 +567,7 @@ impl<M: SensorReadable, T: Transport> Create<M, T> {
                     Ok(acc + members.len() + data_len)
                 } else {
                     Err(Error::Protocol(
-                        create_oi_protocol::error::ProtocolError::UnknownPacketId(id),
+                        create_oi_protocol::error::ProtocolError::UnknownPacketId(id.get()),
                     ))
                 }
             },
@@ -1176,9 +1267,9 @@ impl<M: Mode, T: Transport> Create<M, T> {
     /// Individual packets (7+) are checked against `supports_individual_sensor_packets`
     /// and `max_individual_sensor_packet_id`. Unknown IDs pass through (the caller's
     /// length lookup will produce `UnknownPacketId`).
-    fn validate_packet_id(&self, packet_id: u8) -> Result<(), Error<std::io::Error>> {
+    fn validate_packet_id(&self, packet_id: PacketId) -> Result<(), Error<std::io::Error>> {
         if create_oi_protocol::opcode::group_data_len(packet_id).is_some() {
-            if !self.model.supports_group_packet(packet_id) {
+            if !self.model.supports_group_packet(packet_id.get()) {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
                     reason: "sensor group packet is not supported by this robot model",
@@ -1191,7 +1282,7 @@ impl<M: Mode, T: Transport> Create<M, T> {
                     reason: "individual sensor packet IDs are not supported on Roomba 400; use group IDs 0–3",
                 }));
             }
-            if packet_id > self.model.max_individual_sensor_packet_id() {
+            if packet_id.get() > self.model.max_individual_sensor_packet_id() {
                 return Err(Error::Validation(ValidationError {
                     field: "packet_id",
                     reason: "sensor packet ID is not available on this robot model",

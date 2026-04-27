@@ -41,12 +41,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Current OI mode: {mode:?}");
 
     // --- query_sensor: single packet ---
-    let sd = create.query_sensor(22)?; // voltage
-    println!("Battery voltage (packet 22): {:?} mV", sd.voltage);
+    let sd = create.query_sensor(PacketId::VOLTAGE)?;
+    println!("Battery voltage (PacketId::VOLTAGE): {:?} mV", sd.voltage);
 
-    let sd = create.query_sensor(7)?; // bumps
+    let sd = create.query_sensor(PacketId::BUMPS_AND_WHEEL_DROPS)?;
     println!(
-        "Bumps (packet 7): left={:?}  right={:?}  left_wheel_drop={:?}  right_wheel_drop={:?}",
+        "Bumps (PacketId::BUMPS_AND_WHEEL_DROPS): left={:?}  right={:?}  left_wheel_drop={:?}  right_wheel_drop={:?}",
         sd.is_left_bump(),
         sd.is_right_bump(),
         sd.is_left_wheeldrop(),
@@ -54,7 +54,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- query_list: multiple packets in one round-trip ---
-    let sd = create.query_list(&[22, 23, 25, 26, 35])?;
+    let sd = create.query_list(&[
+        PacketId::VOLTAGE,
+        PacketId::CURRENT,
+        PacketId::BATTERY_CHARGE,
+        PacketId::BATTERY_CAPACITY,
+        PacketId::OI_MODE,
+    ])?;
     println!("\n--- Battery status ---");
     println!("  Voltage:  {:?} mV", sd.voltage);
     println!("  Current:  {:?} mA", sd.current);

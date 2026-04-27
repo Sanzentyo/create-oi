@@ -2,6 +2,25 @@
 
 All notable changes to the `create-oi` workspace are documented here.
 
+## [Unreleased]
+
+### Breaking changes
+
+- **`PacketId` newtype**: All public API functions that previously took `u8` packet
+  IDs now take `PacketId`. This affects `query_sensor`, `query_sensor_raw`,
+  `query_sensor_raw_into`, `query_list`, `start_stream` (and their async counterparts).
+  Convert existing `u8` literals with named constants (`PacketId::WALL`, `PacketId::OI_MODE`, …)
+  or `PacketId::new(n)` / `n.into()` for dynamic values.
+
+### New features
+
+- **`query_list_raw`** (sync + `#[cfg(feature = "alloc")]` async): query multiple sensor
+  packets and return the raw concatenated bytes without decoding.
+- **`query_list_raw_into`** (sync + async no-alloc): same as `query_list_raw` but
+  writes into a caller-provided buffer. Returns the number of bytes written.
+- **`PacketId` named constants**: `PacketId::WALL`, `PacketId::OI_MODE`, `PacketId::GROUP_0`,
+  `PacketId::GROUP_100`, and all 52 individual Create 2 sensor packet IDs.
+
 ## [0.4.0] — first crates.io release
 
 > **Note:** This is the first public release. The version 0.4.0 reflects

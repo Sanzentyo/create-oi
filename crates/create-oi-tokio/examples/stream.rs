@@ -29,9 +29,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let create = create.start().await.map_err(|e| e.source)?;
     let mut create = create.to_safe().await.map_err(|e| e.source)?;
 
-    // Subscribe to sensor packets: bumps (7), voltage (22), OI mode (35)
-    println!("Starting sensor stream (packets 7, 22, 35)...");
-    create.start_stream(&[7, 22, 35]).await?;
+    // Subscribe to sensor packets: BUMPS_AND_WHEEL_DROPS, VOLTAGE, OI_MODE
+    println!("Starting sensor stream (BUMPS_AND_WHEEL_DROPS, VOLTAGE, OI_MODE)...");
+    create
+        .start_stream(&[
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+            PacketId::VOLTAGE,
+            PacketId::OI_MODE,
+        ])
+        .await?;
 
     let mut frames = 0u32;
     let mut paused = false;

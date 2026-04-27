@@ -6,7 +6,7 @@
 use crate::error::ProtocolError;
 use crate::types::{ChargingState, IrChar, OiMode};
 
-use crate::opcode::{group_data_len, group_packet_ids, packet_info};
+use crate::opcode::{PacketId, group_data_len, group_packet_ids, packet_info, packet_info_raw};
 
 // ---------------------------------------------------------------------------
 // Raw sensor value decoding
@@ -155,11 +155,15 @@ pub struct SensorData {
 
 impl SensorData {
     /// Decode a single packet from `data` starting at offset 0,
-    /// and store the result into the appropriate field.
+    /// Decode a single sensor packet by ID and store its value.
+    ///
+    /// `id` must be an individual packet ID (7–58).  Group IDs (0–6, 100+)
+    /// are not accepted here — use [`decode_packets`](Self::decode_packets)
+    /// with group IDs, or call this method per individual ID.
     ///
     /// Returns the number of bytes consumed.
-    pub fn decode_packet(&mut self, id: u8, data: &[u8]) -> Result<usize, ProtocolError> {
-        let info = packet_info(id).ok_or(ProtocolError::UnknownPacketId(id))?;
+    pub fn decode_packet(&mut self, id: PacketId, data: &[u8]) -> Result<usize, ProtocolError> {
+        let info = packet_info(id).ok_or(ProtocolError::UnknownPacketId(id.get()))?;
         let len = info.len as usize;
         if data.len() < len {
             return Err(ProtocolError::InsufficientData {
@@ -168,22 +172,21 @@ impl SensorData {
             });
         }
         let slice = &data[..len];
-        self.store_value(id, slice)?;
+        self.store_value(id.get(), slice)?;
         Ok(len)
     }
 
     /// Decode a sequence of packets (e.g., from a query list response).
-    /// `ids` is the ordered list of packet IDs. `data` is the concatenated bytes.
     ///
-    /// Group packet IDs (0-6, 100) are expanded to their constituent individual
-    /// packet IDs before decoding; the robot always returns individual packet data
-    /// in the same order.
-    pub fn decode_packets(&mut self, ids: &[u8], data: &[u8]) -> Result<(), ProtocolError> {
+    /// `ids` is the ordered list of packet IDs requested. `data` is the
+    /// concatenated response bytes.  Group IDs (0–6, 100+) are expanded to
+    /// their constituent individual packet IDs before decoding.
+    pub fn decode_packets(&mut self, ids: &[PacketId], data: &[u8]) -> Result<(), ProtocolError> {
         let mut offset = 0;
         for &id in ids {
             if let Some(members) = group_packet_ids(id) {
                 for &mid in members {
-                    let consumed = self.decode_packet(mid, &data[offset..])?;
+                    let consumed = self.decode_packet(PacketId::new(mid), &data[offset..])?;
                     offset += consumed;
                 }
             } else {
@@ -693,17 +696,17 @@ impl SensorData {
 /// Compute the expected total data length for a list of packet IDs.
 /// Total expected response length (bytes) for the given list of packet IDs.
 ///
-/// Both individual packet IDs (7-58) and group packet IDs (0-6, 100) are
+/// Both individual packet IDs (7–58) and group packet IDs (0–6, 100+) are
 /// accepted; group IDs are expanded to their constituent packets.
-pub const fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
+pub const fn expected_data_len(ids: &[PacketId]) -> Result<usize, ProtocolError> {
     let mut total = 0usize;
     let mut i = 0;
     while i < ids.len() {
-        match packet_info(ids[i]) {
+        match packet_info_raw(ids[i].get()) {
             Some(p) => total += p.len as usize,
             None => match group_data_len(ids[i]) {
                 Some(len) => total += len,
-                None => return Err(ProtocolError::UnknownPacketId(ids[i])),
+                None => return Err(ProtocolError::UnknownPacketId(ids[i].get())),
             },
         }
         i += 1;
@@ -714,11 +717,12 @@ pub const fn expected_data_len(ids: &[u8]) -> Result<usize, ProtocolError> {
 /// Returns `true` if `ids` contains any duplicate packet ID.
 ///
 /// Uses a 256-bit stack bitset — no allocation required.
-pub fn has_duplicate_ids(ids: &[u8]) -> bool {
+pub fn has_duplicate_ids(ids: &[PacketId]) -> bool {
     let mut seen = [0u8; 32];
-    for &id in ids {
-        let bit = 1u8 << (id & 7);
-        let byte = (id >> 3) as usize;
+    for id in ids {
+        let raw = id.get();
+        let bit = 1u8 << (raw & 7);
+        let byte = (raw >> 3) as usize;
         if seen[byte] & bit != 0 {
             return true;
         }
@@ -762,7 +766,7 @@ mod tests {
     #[test]
     fn decode_single_packet_wall() {
         let mut sd = SensorData::default();
-        let consumed = sd.decode_packet(8, &[1]).unwrap();
+        let consumed = sd.decode_packet(PacketId::WALL, &[1]).unwrap();
         assert_eq!(consumed, 1);
         assert_eq!(sd.wall, Some(true));
     }
@@ -771,7 +775,7 @@ mod tests {
     fn decode_single_packet_voltage() {
         let mut sd = SensorData::default();
         // 12500 mV = 0x30D4
-        let consumed = sd.decode_packet(22, &[0x30, 0xD4]).unwrap();
+        let consumed = sd.decode_packet(PacketId::VOLTAGE, &[0x30, 0xD4]).unwrap();
         assert_eq!(consumed, 2);
         assert_eq!(sd.voltage, Some(12500));
     }
@@ -779,14 +783,14 @@ mod tests {
     #[test]
     fn decode_packet_insufficient_data() {
         let mut sd = SensorData::default();
-        let result = sd.decode_packet(22, &[0x30]); // needs 2 bytes
+        let result = sd.decode_packet(PacketId::VOLTAGE, &[0x30]); // needs 2 bytes
         assert!(result.is_err());
     }
 
     #[test]
     fn decode_packet_unknown_id() {
         let mut sd = SensorData::default();
-        let result = sd.decode_packet(200, &[0x00]);
+        let result = sd.decode_packet(PacketId::new(200), &[0x00]);
         assert!(result.is_err());
     }
 
@@ -795,7 +799,8 @@ mod tests {
         let mut sd = SensorData::default();
         // Decode wall (id 8, 1 byte) + voltage (id 22, 2 bytes)
         let data = [1, 0x30, 0xD4];
-        sd.decode_packets(&[8, 22], &data).unwrap();
+        sd.decode_packets(&[PacketId::WALL, PacketId::VOLTAGE], &data)
+            .unwrap();
         assert_eq!(sd.wall, Some(true));
         assert_eq!(sd.voltage, Some(12500));
     }
@@ -805,7 +810,7 @@ mod tests {
         let mut sd = SensorData::default();
         // wall (id 8, 1 byte) + 2 extra bytes
         let data = [1, 0xFF, 0xFF];
-        let err = sd.decode_packets(&[8], &data).unwrap_err();
+        let err = sd.decode_packets(&[PacketId::WALL], &data).unwrap_err();
         assert!(
             matches!(err, ProtocolError::UnexpectedData { trailing: 2 }),
             "expected UnexpectedData(2), got {err:?}"
@@ -815,7 +820,7 @@ mod tests {
     #[test]
     fn decode_oi_mode() {
         let mut sd = SensorData::default();
-        sd.decode_packet(35, &[2]).unwrap();
+        sd.decode_packet(PacketId::OI_MODE, &[2]).unwrap();
         assert_eq!(sd.oi_mode, Some(OiMode::Safe));
     }
 
@@ -823,7 +828,7 @@ mod tests {
     fn decode_signed_current() {
         let mut sd = SensorData::default();
         // -500 mA = 0xFE0C
-        sd.decode_packet(23, &[0xFE, 0x0C]).unwrap();
+        sd.decode_packet(PacketId::CURRENT, &[0xFE, 0x0C]).unwrap();
         assert_eq!(sd.current, Some(-500));
     }
 
@@ -831,14 +836,17 @@ mod tests {
     fn decode_temperature() {
         let mut sd = SensorData::default();
         // -10°C = 0xF6 as i8
-        sd.decode_packet(24, &[0xF6]).unwrap();
+        sd.decode_packet(PacketId::TEMPERATURE, &[0xF6]).unwrap();
         assert_eq!(sd.temperature, Some(-10));
     }
 
     #[test]
     fn expected_data_len_computes() {
         // wall(1) + voltage(2) + distance(2) = 5
-        assert_eq!(expected_data_len(&[8, 22, 19]).unwrap(), 5);
+        assert_eq!(
+            expected_data_len(&[PacketId::WALL, PacketId::VOLTAGE, PacketId::DISTANCE]).unwrap(),
+            5
+        );
     }
 
     #[test]
@@ -848,7 +856,7 @@ mod tests {
         let mut sd = SensorData::default();
         for p in SENSOR_PACKETS {
             let data: Vec<u8> = vec![0; p.len as usize];
-            sd.decode_packet(p.id, &data).unwrap();
+            sd.decode_packet(PacketId::new(p.id), &data).unwrap();
         }
     }
 
@@ -856,10 +864,10 @@ mod tests {
     fn decode_distance_angle_fields() {
         let mut sd = SensorData::default();
         // distance = +500 mm = 0x01F4
-        sd.decode_packet(19, &[0x01, 0xF4]).unwrap();
+        sd.decode_packet(PacketId::DISTANCE, &[0x01, 0xF4]).unwrap();
         assert_eq!(sd.distance_delta_mm, Some(500));
         // angle = -90 deg = 0xFFA6
-        sd.decode_packet(20, &[0xFF, 0xA6]).unwrap();
+        sd.decode_packet(PacketId::ANGLE, &[0xFF, 0xA6]).unwrap();
         assert_eq!(sd.angle_delta_deg, Some(-90));
     }
 
@@ -867,16 +875,16 @@ mod tests {
     fn stasis_detected_accessor() {
         let mut sd = SensorData::default();
         // bit 0 set → forward progress detected
-        sd.decode_packet(58, &[0x01]).unwrap();
+        sd.decode_packet(PacketId::STASIS, &[0x01]).unwrap();
         assert_eq!(sd.is_making_forward_progress(), Some(true));
         // bit 0 clear → no forward progress
-        sd.decode_packet(58, &[0x00]).unwrap();
+        sd.decode_packet(PacketId::STASIS, &[0x00]).unwrap();
         assert_eq!(sd.is_making_forward_progress(), Some(false));
         // reserved bits set but bit 0 clear
-        sd.decode_packet(58, &[0xFE]).unwrap();
+        sd.decode_packet(PacketId::STASIS, &[0xFE]).unwrap();
         assert_eq!(sd.is_making_forward_progress(), Some(false));
         // reserved bits + bit 0 → detected
-        sd.decode_packet(58, &[0xFF]).unwrap();
+        sd.decode_packet(PacketId::STASIS, &[0xFF]).unwrap();
         assert_eq!(sd.is_making_forward_progress(), Some(true));
     }
 
@@ -889,20 +897,36 @@ mod tests {
     #[test]
     fn has_duplicate_ids_no_dups() {
         assert!(
-            !has_duplicate_ids(&[7, 8, 22, 19]),
+            !has_duplicate_ids(&[
+                PacketId::BUMPS_AND_WHEEL_DROPS,
+                PacketId::WALL,
+                PacketId::VOLTAGE,
+                PacketId::DISTANCE
+            ]),
             "distinct IDs have no duplicates"
         );
     }
 
     #[test]
     fn has_duplicate_ids_adjacent_dup() {
-        assert!(has_duplicate_ids(&[7, 7]), "adjacent duplicate detected");
+        assert!(
+            has_duplicate_ids(&[
+                PacketId::BUMPS_AND_WHEEL_DROPS,
+                PacketId::BUMPS_AND_WHEEL_DROPS
+            ]),
+            "adjacent duplicate detected"
+        );
     }
 
     #[test]
     fn has_duplicate_ids_non_adjacent_dup() {
         assert!(
-            has_duplicate_ids(&[7, 8, 22, 7]),
+            has_duplicate_ids(&[
+                PacketId::BUMPS_AND_WHEEL_DROPS,
+                PacketId::WALL,
+                PacketId::VOLTAGE,
+                PacketId::BUMPS_AND_WHEEL_DROPS
+            ]),
             "non-adjacent duplicate detected"
         );
     }
@@ -911,7 +935,11 @@ mod tests {
     fn has_duplicate_ids_group_ids_not_same_as_individuals() {
         // Group ID 0 is different from individual IDs 7-26; not a duplicate
         assert!(
-            !has_duplicate_ids(&[0, 7, 8]),
+            !has_duplicate_ids(&[
+                PacketId::GROUP_0,
+                PacketId::BUMPS_AND_WHEEL_DROPS,
+                PacketId::WALL
+            ]),
             "group ID 0 is not the same as ID 7 or 8"
         );
     }
@@ -920,29 +948,29 @@ mod tests {
     #[test]
     fn expected_data_len_group_0() {
         // Group 0 = packets 7-26; total = sum of their individual lengths
-        let len = expected_data_len(&[0]).unwrap();
+        let len = expected_data_len(&[PacketId::GROUP_0]).unwrap();
         // Validate it's non-zero and matches group_data_len
-        assert_eq!(Some(len), group_data_len(0));
+        assert_eq!(Some(len), group_data_len(PacketId::GROUP_0));
     }
 
     #[test]
     fn expected_data_len_group_100() {
-        let len = expected_data_len(&[100]).unwrap();
-        assert_eq!(Some(len), group_data_len(100));
+        let len = expected_data_len(&[PacketId::GROUP_100]).unwrap();
+        assert_eq!(Some(len), group_data_len(PacketId::GROUP_100));
     }
 
     #[test]
     fn expected_data_len_mixed_individual_and_group() {
         // Mix a group ID with an individual packet
-        let group_len = group_data_len(6).unwrap();
-        let individual_len = packet_info(8).unwrap().len as usize;
-        let total = expected_data_len(&[6, 8]).unwrap();
+        let group_len = group_data_len(PacketId::GROUP_6).unwrap();
+        let individual_len = packet_info(PacketId::WALL).unwrap().len as usize;
+        let total = expected_data_len(&[PacketId::GROUP_6, PacketId::WALL]).unwrap();
         assert_eq!(total, group_len + individual_len);
     }
 
     #[test]
     fn expected_data_len_unknown_id_fails() {
-        let result = expected_data_len(&[200]);
+        let result = expected_data_len(&[PacketId::new(200)]);
         assert!(result.is_err(), "unknown ID 200 should return Err");
     }
 
@@ -1005,7 +1033,7 @@ mod tests {
     fn cargo_bay_di_accessors() {
         let mut sd = SensorData::default();
         // bits 0..3 set, bit 4 (device detect) clear
-        sd.decode_packet(32, &[0x0F]).unwrap();
+        sd.decode_packet(PacketId::new(32), &[0x0F]).unwrap();
         assert_eq!(sd.is_cargo_bay_di0(), Some(true));
         assert_eq!(sd.is_cargo_bay_di1(), Some(true));
         assert_eq!(sd.is_cargo_bay_di2(), Some(true));
@@ -1016,7 +1044,7 @@ mod tests {
     #[test]
     fn home_base_connected_accessor() {
         let mut sd = SensorData::default();
-        sd.decode_packet(32, &[0x10]).unwrap(); // only bit 4 set
+        sd.decode_packet(PacketId::new(32), &[0x10]).unwrap(); // only bit 4 set
         assert_eq!(sd.is_cargo_bay_di0(), Some(false));
         assert_eq!(sd.is_home_base_connected(), Some(true));
     }

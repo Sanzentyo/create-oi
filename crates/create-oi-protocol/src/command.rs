@@ -11,7 +11,7 @@
 use alloc::vec::Vec;
 
 use crate::error::ProtocolError;
-use crate::opcode::Opcode;
+use crate::opcode::{Opcode, PacketId};
 use crate::types::{RadiusMm, VelocityMmPerSec, WheelPwm};
 
 /// Start the OI. Transitions to Passive mode.
@@ -263,8 +263,8 @@ pub const fn encode_play(song_number: u8) -> [u8; 2] {
 
 /// Request a single sensor packet.
 #[inline(always)]
-pub const fn encode_sensors(packet_id: u8) -> [u8; 2] {
-    [Opcode::Sensors as u8, packet_id]
+pub const fn encode_sensors(packet_id: PacketId) -> [u8; 2] {
+    [Opcode::Sensors as u8, packet_id.get()]
 }
 
 /// Request multiple sensor packets (query list). Writes into `buf`.
@@ -272,7 +272,10 @@ pub const fn encode_sensors(packet_id: u8) -> [u8; 2] {
 /// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
-pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+pub fn encode_query_list_into(
+    buf: &mut [u8],
+    packet_ids: &[PacketId],
+) -> Result<usize, ProtocolError> {
     if packet_ids.is_empty() {
         return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
     }
@@ -291,7 +294,10 @@ pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize
     }
     buf[0] = Opcode::QueryList as u8;
     buf[1] = packet_ids.len() as u8;
-    buf[2..need].copy_from_slice(packet_ids);
+    buf[2..need]
+        .iter_mut()
+        .zip(packet_ids.iter())
+        .for_each(|(dst, src)| *dst = src.get());
     Ok(need)
 }
 
@@ -300,7 +306,7 @@ pub fn encode_query_list_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize
 /// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
-pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+pub fn encode_query_list(packet_ids: &[PacketId]) -> Result<Vec<u8>, ProtocolError> {
     if packet_ids.is_empty() {
         return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
     }
@@ -313,7 +319,7 @@ pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::QueryList as u8);
     buf.push(packet_ids.len() as u8);
-    buf.extend_from_slice(packet_ids);
+    buf.extend(packet_ids.iter().map(|p| p.get()));
     Ok(buf)
 }
 
@@ -322,7 +328,7 @@ pub fn encode_query_list(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 /// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 /// Required buffer size: `2 + packet_ids.len()`
-pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, ProtocolError> {
+pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[PacketId]) -> Result<usize, ProtocolError> {
     if packet_ids.is_empty() {
         return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
     }
@@ -341,7 +347,10 @@ pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, Pr
     }
     buf[0] = Opcode::Stream as u8;
     buf[1] = packet_ids.len() as u8;
-    buf[2..need].copy_from_slice(packet_ids);
+    buf[2..need]
+        .iter_mut()
+        .zip(packet_ids.iter())
+        .for_each(|(dst, src)| *dst = src.get());
     Ok(need)
 }
 
@@ -350,7 +359,7 @@ pub fn encode_stream_into(buf: &mut [u8], packet_ids: &[u8]) -> Result<usize, Pr
 /// Returns `TooFewItems` if `packet_ids` is empty.
 /// Returns `TooManyItems` if `packet_ids.len() > 255`.
 #[cfg(feature = "alloc")]
-pub fn encode_stream(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+pub fn encode_stream(packet_ids: &[PacketId]) -> Result<Vec<u8>, ProtocolError> {
     if packet_ids.is_empty() {
         return Err(ProtocolError::TooFewItems { min: 1, got: 0 });
     }
@@ -363,7 +372,7 @@ pub fn encode_stream(packet_ids: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     let mut buf = Vec::with_capacity(2 + packet_ids.len());
     buf.push(Opcode::Stream as u8);
     buf.push(packet_ids.len() as u8);
-    buf.extend_from_slice(packet_ids);
+    buf.extend(packet_ids.iter().map(|p| p.get()));
     Ok(buf)
 }
 
@@ -460,19 +469,29 @@ mod tests {
 
     #[test]
     fn sensors_group_100() {
-        let cmd = encode_sensors(100);
+        let cmd = encode_sensors(PacketId::GROUP_100);
         assert_eq!(cmd, [142, 100]);
     }
 
     #[test]
     fn query_list() {
-        let cmd = encode_query_list(&[7, 8, 35]).unwrap();
+        let cmd = encode_query_list(&[
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+            PacketId::WALL,
+            PacketId::OI_MODE,
+        ])
+        .unwrap();
         assert_eq!(cmd, [149, 3, 7, 8, 35]);
     }
 
     #[test]
     fn stream_encode() {
-        let cmd = encode_stream(&[7, 8, 9]).unwrap();
+        let cmd = encode_stream(&[
+            PacketId::BUMPS_AND_WHEEL_DROPS,
+            PacketId::WALL,
+            PacketId::CLIFF_LEFT,
+        ])
+        .unwrap();
         assert_eq!(cmd, [148, 3, 7, 8, 9]);
     }
 
